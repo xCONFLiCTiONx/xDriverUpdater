@@ -68,8 +68,13 @@ public sealed class WindowsUpdateDriverService
                     }
 
                     var version = ExtractVersionFromTitle(title);
-                    if (string.IsNullOrWhiteSpace(version) && verDate.HasValue)
+                    bool hasExplicitDriverVersion = !string.IsNullOrWhiteSpace(version);
+                    if (!hasExplicitDriverVersion && verDate.HasValue)
                         version = verDate.Value.ToString("yyyy.MM.dd");
+
+                    bool isNewerThanInstalled = matchedDevice?.BusType.Equals("MONITOR", StringComparison.OrdinalIgnoreCase) == true
+                        ? hasExplicitDriverVersion && DirectManufacturerService.IsVersionNewer(version, matchedDevice.DriverVersion)
+                        : true;
 
                     var candidate = new DriverUpdateCandidate
                     {
@@ -92,6 +97,7 @@ public sealed class WindowsUpdateDriverService
                         DeviceName = matchedDevice?.DisplayName ?? (string.IsNullOrWhiteSpace(driverModel) ? title : driverModel),
                         DeviceId = matchedDevice?.DeviceId ?? "",
                         InstalledVersion = matchedDevice?.DriverVersion ?? "Unknown",
+                        IsNewerThanInstalled = isNewerThanInstalled,
                         MatchScore = matchedDevice?.IsLaptopOemCustomized == true ? 95 : 80
                     };
 
@@ -99,7 +105,7 @@ public sealed class WindowsUpdateDriverService
                     if (matchedDevice != null)
                     {
                         matchedDevice.AvailableUpdates.Add(candidate);
-                        if (!matchedDevice.HasProblem)
+                        if (candidate.IsNewerThanInstalled && !matchedDevice.HasProblem)
                             matchedDevice.HealthStatus = DriverHealthStatus.UpdateAvailable;
                     }
                 }
