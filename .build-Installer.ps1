@@ -24,7 +24,8 @@ $exeName       = "xDriverUpdater.exe"
 $version       = "1.0.0"
 $appId         = "E7C3A914-5B2D-4F8A-9C1E-6D4B8A2F7E05"
 $description   = "Smart Hardware-Aware Windows Driver Manager and Dual-Source Updater"
-$sourceDir     = Join-Path $env:LOCALAPPDATA "xPrograms\$folderName"
+$installDir    = Join-Path $env:LOCALAPPDATA "xPrograms\$folderName"
+$sourceDir     = Join-Path $repoRoot "src\bin\Release\net8.0-windows"
 $repoIcon      = Join-Path $repoRoot "src\icon.ico"
 
 if (-not (Test-Path $IsccPath)) {
@@ -40,7 +41,7 @@ if ($RebuildApp -or -not (Test-Path (Join-Path $sourceDir $exeName))) {
 }
 
 if (-not (Test-Path $sourceDir)) {
-    throw "Deployed application folder not found: $sourceDir. Run .\.build.ps1 first."
+    throw "Release build folder not found: $sourceDir. Run .\.build.ps1 first."
 }
 
 $destIcon = Join-Path $sourceDir "icon.ico"
@@ -107,7 +108,7 @@ $issLines = @(
     "Name: `"desktopicon`"; Description: `"{cm:CreateDesktopIcon}`"; GroupDescription: `"{cm:AdditionalIcons}`"; Flags: unchecked",
     "",
     "[Files]",
-    "Source: `"{#SourcePath}\*`"; DestDir: `"{app}`"; Excludes: `"unins*.*`"; Flags: ignoreversion recursesubdirs createallsubdirs",
+    "Source: `"{#SourcePath}\*`"; DestDir: `"{app}`"; Excludes: `"unins*.*,*.pdb,Backups\*,Downloads\*,settings.json`"; Flags: ignoreversion recursesubdirs createallsubdirs",
     "",
     "[Icons]",
     "Name: `"{userprograms}\{#AppName}`"; Filename: `"{app}\{#AppExeName}`"; WorkingDir: `"{app}`"; Comment: `"{#AppDescription}`"",
@@ -200,5 +201,5 @@ if ($Install) {
     if ($p.ExitCode -ne 0) {
         throw "Silent install failed with exit code $($p.ExitCode)"
     }
-    Write-Host "[OK] Installed & registered $appName v$version in $sourceDir" -ForegroundColor Green
+    Write-Host "[OK] Installed & registered $appName v$version in $installDir" -ForegroundColor Green
 }
