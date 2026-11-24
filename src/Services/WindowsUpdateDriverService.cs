@@ -223,6 +223,16 @@ public sealed class WindowsUpdateDriverService
                 d.HardwareId.Equals(hwid, StringComparison.OrdinalIgnoreCase));
             if (exact != null) return exact;
 
+            // Monitor update identities are model-specific. Never fall back to a fuzzy
+            // display-name match for a MONITOR\ hardware ID.
+            if (hwid.StartsWith("MONITOR\\", StringComparison.OrdinalIgnoreCase))
+            {
+                return devices.FirstOrDefault(d =>
+                    d.BusType.Equals("MONITOR", StringComparison.OrdinalIgnoreCase) &&
+                    (d.HardwareIds.Any(h => h.StartsWith(hwid, StringComparison.OrdinalIgnoreCase)) ||
+                     d.HardwareId.StartsWith(hwid, StringComparison.OrdinalIgnoreCase)));
+            }
+
             var prefix = devices.FirstOrDefault(d =>
                 d.HardwareIds.Any(h => h.StartsWith(hwid, StringComparison.OrdinalIgnoreCase) ||
                                        hwid.StartsWith(h, StringComparison.OrdinalIgnoreCase)));
