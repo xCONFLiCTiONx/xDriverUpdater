@@ -57,8 +57,15 @@ public sealed class WindowsUpdateDriverService
                     bool rebootReq = SafeBool(() => (bool)upd.RebootRequired);
                     DateTime? verDate = SafeDate(() => (DateTime)upd.DriverVerDate);
 
-                    // Match back to our inspected device list
+                    // Match back to our inspected device list. A monitor update must
+                    // identify an inspected monitor by its MONITOR\\ hardware ID; do not
+                    // surface an unbound catalog/update result as if it belonged to this display.
                     var matchedDevice = MatchDevice(devices, driverHwid, driverModel, title, driverProvider);
+                    if (driverHwid.StartsWith("MONITOR\\", StringComparison.OrdinalIgnoreCase) &&
+                        (matchedDevice == null || !matchedDevice.BusType.Equals("MONITOR", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
 
                     var version = ExtractVersionFromTitle(title);
                     if (string.IsNullOrWhiteSpace(version) && verDate.HasValue)
