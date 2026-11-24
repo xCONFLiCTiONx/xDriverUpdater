@@ -150,9 +150,9 @@ public sealed class MicrosoftCatalogService
 
             DateTime? relDate = DateTime.TryParse(lastUpdatedStr, out var dt) ? dt : null;
             long sizeBytes = ParseSize(sizeStr);
-            bool isMonitorInbox = device.BusType == "MONITOR" &&
-                (device.DriverProvider.Equals("Microsoft", StringComparison.OrdinalIgnoreCase) || device.DriverDate?.Year == 2006);
-            bool isNewer = isMonitorInbox || DirectManufacturerService.IsVersionNewer(version, device.DriverVersion);
+            // The Microsoft inbox monitor.inf date/provider is not evidence that a catalog
+            // package is newer or compatible. Compare the actual package version instead.
+            bool isNewer = DirectManufacturerService.IsVersionNewer(version, device.DriverVersion);
 
             list.Add(new DriverUpdateCandidate
             {
