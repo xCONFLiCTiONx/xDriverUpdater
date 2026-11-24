@@ -135,6 +135,50 @@ public sealed class DriverStoreAndInstallService
         });
     }
 
+    public async Task<(int RemovedCount, List<(DriverStorePackage Package, string Error)> Failed)> DeleteStalePackagesAsync(
+        IReadOnlyList<DriverStorePackage> stalePackages,
+        Action<string>? log = null,
+        IProgress<(int Completed, int Total, DriverStorePackage Current)>? progress = null,
+        CancellationToken ct = default)
+    {
+        int removed = 0;
+        var failed = new List<(DriverStorePackage Package, string Error)>();
+
+        for (int i = 0; i < stalePackages.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var pkg = stalePackages[i];
+            progress?.Report((i, stalePackages.Count, pkg));
+
+            if (pkg.IsInUse || !pkg.IsSuperseded)
+            {
+                failed.Add((pkg, "Skipped because package is not marked stale/inactive."));
+                log?.Invoke($"[DriverStore] Skipped {pkg.PublishedName} ({pkg.OriginalName}): package is not stale/inactive.");
+                continue;
+            }
+
+            var (ok, msg) = await DeleteDriverStorePackageAsync(pkg.PublishedName, force: false);
+            var summary = string.IsNullOrWhiteSpace(msg)
+                ? (ok ? "Deleted." : "pnputil failed.")
+                : msg.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? msg;
+
+            if (ok)
+            {
+                removed++;
+                log?.Invoke($"[DriverStore] Deleted stale package {pkg.PublishedName} ({pkg.OriginalName}, v{pkg.DriverVersion}): {summary}");
+            }
+            else
+            {
+                failed.Add((pkg, summary));
+                log?.Invoke($"[DriverStore] Failed to delete {pkg.PublishedName} ({pkg.OriginalName}): {summary}");
+            }
+
+            progress?.Report((i + 1, stalePackages.Count, pkg));
+        }
+
+        return (removed, failed);
+    }
+
     public Task<(bool Success, string OutputFolder, string Message)> ExportAllDriversBackupAsync(
         string baseBackupDir,
         Action<string>? log = null,

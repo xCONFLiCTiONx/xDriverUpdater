@@ -366,12 +366,13 @@
           </Grid.RowDefinitions>
 
           <!-- Actions Bar -->
-          <WrapPanel Grid.Row="0" Margin="0,0,0,10">
-            <Button x:Name="BackupAllDriversBtn" Content="Backup All 3rd-Party Drivers" Style="{StaticResource PrimaryButton}" Click="BackupAllDriversBtn_Click" Margin="0,0,8,0"/>
-            <Button x:Name="InstallLocalDriverBtn" Content="Install Local INF / CAB / ZIP..." Style="{StaticResource SuccessButton}" Click="InstallLocalDriverBtn_Click" Margin="0,0,8,0"/>
-            <Button x:Name="DeleteStorePkgBtn" Content="Delete Selected Stale Package" Style="{StaticResource DangerButton}" Click="DeleteStorePkgBtn_Click" Margin="0,0,8,0"/>
-            <Button x:Name="OpenBackupsFolderBtn" Content="Open Backups Folder" Click="OpenBackupsFolderBtn_Click" Margin="0,0,8,0"/>
-            <Button x:Name="RefreshStoreBtn" Content="Refresh Driver Store" Click="RefreshStoreBtn_Click"/>
+          <WrapPanel Grid.Row="0" Margin="0,0,0,4">
+            <Button x:Name="BackupAllDriversBtn" Content="Backup All 3rd-Party Drivers" Style="{StaticResource PrimaryButton}" Click="BackupAllDriversBtn_Click" Margin="0,0,8,6"/>
+            <Button x:Name="InstallLocalDriverBtn" Content="Install Local INF / CAB / ZIP..." Style="{StaticResource SuccessButton}" Click="InstallLocalDriverBtn_Click" Margin="0,0,8,6"/>
+            <Button x:Name="DeleteStorePkgBtn" Content="Delete Selected Stale Package" Style="{StaticResource DangerButton}" Click="DeleteStorePkgBtn_Click" Margin="0,0,8,6"/>
+            <Button x:Name="CleanAllStaleBtn" Content="Clean All Stale Packages" Style="{StaticResource DangerButton}" Click="CleanAllStaleBtn_Click" Margin="0,0,8,6" ToolTip="Remove all superseded, inactive (STALE) third-party OEM driver packages from the Windows Driver Store."/>
+            <Button x:Name="OpenBackupsFolderBtn" Content="Open Backups Folder" Click="OpenBackupsFolderBtn_Click" Margin="0,0,8,6"/>
+            <Button x:Name="RefreshStoreBtn" Content="Refresh Driver Store" Click="RefreshStoreBtn_Click" Margin="0,0,0,6"/>
           </WrapPanel>
 
           <!-- Driver Store Grid -->

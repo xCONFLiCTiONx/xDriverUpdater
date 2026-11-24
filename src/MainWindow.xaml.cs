@@ -149,6 +149,9 @@ public partial class MainWindow : Window
         InstallSelectedUpdatesBtn.IsEnabled = !busy;
         BackupAllDriversBtn.IsEnabled = !busy;
         InstallLocalDriverBtn.IsEnabled = !busy;
+        DeleteStorePkgBtn.IsEnabled = !busy;
+        CleanAllStaleBtn.IsEnabled = !busy && _storePackages.Any(p => p.IsSuperseded && !p.IsInUse);
+        RefreshStoreBtn.IsEnabled = !busy;
         StatusFooterText.Text = status;
         MainProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         MainProgressBar.IsIndeterminate = indeterminate;
@@ -215,6 +218,11 @@ public partial class MainWindow : Window
         UpdatesTabItem.Header = _updateGroups.Count > 0
             ? $"Updates Available ({devicesWithNewer} new / {_updateGroups.Count} devices)"
             : "Updates Available";
+
+        CleanAllStaleBtn.Content = staleStore > 0
+            ? $"Clean All Stale Packages ({staleStore})"
+            : "Clean All Stale Packages";
+        CleanAllStaleBtn.IsEnabled = !_isBusy && staleStore > 0;
     }
 
     private async Task RunUpdateScanAsync(bool includeWua, bool includeDirect, bool includeRepos)
@@ -747,6 +755,79 @@ public partial class MainWindow : Window
         AppendLog($"[DriverStore] Delete {pkg.PublishedName}: {msg}");
         await RefreshHardwareAndStoreAsync();
         SetBusy(false, ok ? $"Removed {pkg.PublishedName}." : $"Failed to remove {pkg.PublishedName}.");
+    }
+
+    private async void CleanAllStaleBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+
+        var stalePackages = _storePackages
+            .Where(p => p.IsSuperseded && !p.IsInUse && p.PublishedName.StartsWith("oem", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (stalePackages.Count == 0)
+        {
+            DarkDialog.Show("No stale (superseded, inactive) OEM driver packages were found in the Windows Driver Store.", "Driver Store Clean", DarkDialogKind.Info, this);
+            return;
+        }
+
+        var previewLines = string.Join("\n", stalePackages.Take(8).Select(p =>
+            $"  • {p.PublishedName} — {p.OriginalName} (v{p.DriverVersion}, {p.ProviderName})"));
+        if (stalePackages.Count > 8)
+            previewLines += $"\n  ... and {stalePackages.Count - 8} more";
+
+        var confirmed = DarkDialog.Confirm(
+            $"Remove all {stalePackages.Count} stale (superseded, inactive) OEM driver package(s) from the Windows Driver Store?\n\n" +
+            $"{previewLines}\n\n" +
+            "Active drivers currently in use by devices will not be affected.",
+            "Confirm Clean All Stale Packages", DarkDialogKind.Question, this);
+        if (!confirmed) return;
+
+        SetBusy(true, $"Cleaning up {stalePackages.Count} stale driver package(s)...", indeterminate: false);
+        MainProgressBar.Value = 0;
+        AppendLog($"[DriverStore] Starting bulk cleanup of {stalePackages.Count} stale package(s)...");
+
+        try
+        {
+            var progress = new Progress<(int Completed, int Total, DriverStorePackage Current)>(p =>
+            {
+                MainProgressBar.IsIndeterminate = false;
+                MainProgressBar.Value = p.Total > 0 ? (double)p.Completed / p.Total * 100.0 : 0;
+                if (p.Completed < p.Total)
+                    StatusFooterText.Text = $"Removing stale package {p.Completed + 1}/{p.Total}: {p.Current.PublishedName} ({p.Current.OriginalName})...";
+            });
+
+            var (removed, failed) = await _storeService.DeleteStalePackagesAsync(stalePackages, AppendLog, progress);
+            AppendLog($"[DriverStore] Bulk stale cleanup complete: {removed}/{stalePackages.Count} removed, {failed.Count} failed.");
+
+            await RefreshHardwareAndStoreAsync();
+
+            if (failed.Count == 0)
+            {
+                StatusFooterText.Text = $"Cleaned up {removed} stale driver package(s).";
+                DarkDialog.Show(
+                    $"Successfully removed {removed} stale driver package(s) from the Windows Driver Store.",
+                    "Driver Store Cleanup Complete", DarkDialogKind.Success, this);
+            }
+            else
+            {
+                StatusFooterText.Text = $"Cleanup finished: {removed}/{stalePackages.Count} removed ({failed.Count} failed).";
+                var failLines = string.Join("\n", failed.Take(5).Select(f => $"  • {f.Package.PublishedName} ({f.Package.OriginalName}): {f.Error}"));
+                if (failed.Count > 5)
+                    failLines += $"\n  ... and {failed.Count - 5} more (see Execution & Audit Log)";
+
+                DarkDialog.Show(
+                    $"Removed {removed} of {stalePackages.Count} stale driver package(s).\n\n" +
+                    $"{failed.Count} package(s) could not be removed:\n{failLines}",
+                    "Driver Store Cleanup Completed with Warnings", DarkDialogKind.Warning, this);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[DriverStore] Bulk cleanup error: {ex.Message}");
+            SetBusy(false, $"Cleanup error: {ex.Message}");
+            DarkDialog.Show($"Stale package cleanup encountered an error:\n\n{ex.Message}", "Driver Store Cleanup Error", DarkDialogKind.Warning, this);
+        }
     }
 
     private void OpenBackupsFolderBtn_Click(object sender, RoutedEventArgs e)
