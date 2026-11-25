@@ -236,7 +236,8 @@ public sealed class DriverStoreAndInstallService
         WindowsUpdateDriverService wuaService,
         Action<string>? log = null,
         IProgress<double>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool silentMode = false)
     {
         // Browser-only portal link
         if (candidate.InstallerType.Equals("page", StringComparison.OrdinalIgnoreCase))

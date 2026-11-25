@@ -61,6 +61,18 @@ public sealed class ConfigStore
         if (string.IsNullOrWhiteSpace(s.DownloadCacheDirectory))
             s.DownloadCacheDirectory = Path.Combine(ConfigDir, "Downloads");
 
+        if (string.IsNullOrWhiteSpace(s.LogDirectory))
+            s.LogDirectory = Path.Combine(ConfigDir, "Logs");
+
+        if (string.IsNullOrWhiteSpace(s.XSecurityEndpointUrl))
+            s.XSecurityEndpointUrl = "http://192.168.88.50:4789/api/events/ingest";
+
+        if (string.IsNullOrWhiteSpace(s.ScheduledTaskFrequency))
+            s.ScheduledTaskFrequency = "Daily";
+
+        if (string.IsNullOrWhiteSpace(s.ScheduledTaskTime))
+            s.ScheduledTaskTime = "03:00";
+
         if (s.Repositories == null)
             s.Repositories = new List<RepositorySourceConfig>();
 
