@@ -312,10 +312,26 @@ public sealed class DriverStoreAndInstallService
 
         if (effectiveType is "exe" or "msi")
         {
-            log?.Invoke($"[Install] Launching vendor installer: {localPath} {candidate.SilentArgs}");
+            var effectiveArgs = candidate.SilentArgs;
+            if (silentMode && effectiveType == "msi" && string.IsNullOrWhiteSpace(effectiveArgs))
+                effectiveArgs = "/qn /norestart";
+            if (silentMode && effectiveType == "exe" && string.IsNullOrWhiteSpace(effectiveArgs))
+                return (false, false, "Skipped EXE installer in silent mode because no silent arguments were defined.");
+
+            log?.Invoke($"[Install] Launching vendor installer{(silentMode ? " (silent)" : "")}: {localPath} {effectiveArgs}");
             var psi = effectiveType == "msi"
-                ? new ProcessStartInfo("msiexec.exe", $"/i \"{localPath}\" {candidate.SilentArgs}") { UseShellExecute = true }
-                : new ProcessStartInfo(localPath, candidate.SilentArgs) { UseShellExecute = true };
+                ? new ProcessStartInfo("msiexec.exe", $"/i \"{localPath}\" {effectiveArgs}")
+                {
+                    UseShellExecute = !silentMode,
+                    CreateNoWindow = silentMode,
+                    WindowStyle = silentMode ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal
+                }
+                : new ProcessStartInfo(localPath, effectiveArgs)
+                {
+                    UseShellExecute = !silentMode,
+                    CreateNoWindow = silentMode,
+                    WindowStyle = silentMode ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal
+                };
 
             using var proc = Process.Start(psi);
             if (proc == null) return (false, false, "Failed to start vendor installer.");

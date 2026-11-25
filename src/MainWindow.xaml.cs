@@ -25,6 +25,9 @@ public partial class MainWindow : Window
     private readonly DirectManufacturerService _directService = new();
     private readonly RepositoryManagerService _repoService = new();
     private readonly DriverStoreAndInstallService _storeService = new();
+    private readonly ScheduledTaskService _taskService = new();
+    private readonly SilentDriverUpdateService _silentUpdateService = new();
+    private readonly XSecurityAlertService _alertService = new();
 
     private AppSettings _settings = new();
     private SystemProfile _profile = new();
@@ -112,7 +115,7 @@ public partial class MainWindow : Window
     {
         ApplySettingsToUi();
         ReposGrid.ItemsSource = _settings.Repositories;
-        await RefreshHardwareAndStoreAsync();
+        await Task.WhenAll(RefreshHardwareAndStoreAsync(), RefreshScheduledTaskStatusAsync());
     }
 
     private void ApplySettingsToUi()
@@ -124,6 +127,10 @@ public partial class MainWindow : Window
         ChkPreferLaptopOem.IsChecked = _settings.PreferOemDriversOnLaptops;
         ChkRestorePoint.IsChecked = _settings.CreateRestorePointBeforeInstall;
         ChkAutoBackup.IsChecked = _settings.BackupDriverBeforeInstall;
+        ChkLocalToastOnFailure.IsChecked = _settings.EnableLocalToastOnFailure;
+        SchedTimeBox.Text = _settings.ScheduledTaskTime;
+        XSecurityUrlBox.Text = _settings.XSecurityEndpointUrl;
+        SchedFreqCombo.SelectedIndex = string.Equals(_settings.ScheduledTaskFrequency, "Weekly", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         _loadingSettings = false;
     }
 
@@ -136,6 +143,7 @@ public partial class MainWindow : Window
         _settings.PreferOemDriversOnLaptops = ChkPreferLaptopOem.IsChecked == true;
         _settings.CreateRestorePointBeforeInstall = ChkRestorePoint.IsChecked == true;
         _settings.BackupDriverBeforeInstall = ChkAutoBackup.IsChecked == true;
+        _settings.EnableLocalToastOnFailure = ChkLocalToastOnFailure.IsChecked == true;
         _configStore.Save(_settings);
     }
 
@@ -152,6 +160,10 @@ public partial class MainWindow : Window
         DeleteStorePkgBtn.IsEnabled = !busy;
         CleanAllStaleBtn.IsEnabled = !busy && _storePackages.Any(p => p.IsSuperseded && !p.IsInUse);
         RefreshStoreBtn.IsEnabled = !busy;
+        RegisterTaskBtn.IsEnabled = !busy;
+        RunSilentNowBtn.IsEnabled = !busy;
+        TestAlertBtn.IsEnabled = !busy;
+        RemoveTaskBtn.IsEnabled = !busy;
         StatusFooterText.Text = status;
         MainProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         MainProgressBar.IsIndeterminate = indeterminate;
@@ -840,5 +852,93 @@ public partial class MainWindow : Window
     {
         if (_isBusy) return;
         await RefreshHardwareAndStoreAsync();
+    }
+
+    // ==================== SCHEDULED SILENT UPDATES & xSECURITY ALERTS ====================
+
+    private async Task RefreshScheduledTaskStatusAsync()
+    {
+        var info = await _taskService.GetStatusAsync();
+        Dispatcher.Invoke(() =>
+        {
+            ScheduledTaskStatusText.Text = info.Exists
+                ? $"Registered ({info.State})  •  Next: {info.NextRun}  •  Last: {info.LastRun} ({info.LastResult})"
+                : "Not registered in Windows Task Scheduler";
+        });
+    }
+
+    private void SaveScheduledUiSettings()
+    {
+        _settings.ScheduledTaskFrequency = (SchedFreqCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Daily";
+        _settings.ScheduledTaskTime = string.IsNullOrWhiteSpace(SchedTimeBox.Text) ? "03:00" : SchedTimeBox.Text.Trim();
+        _settings.XSecurityEndpointUrl = string.IsNullOrWhiteSpace(XSecurityUrlBox.Text)
+            ? "http://192.168.88.50:4789/api/events/ingest"
+            : XSecurityUrlBox.Text.Trim();
+        _settings.EnableLocalToastOnFailure = ChkLocalToastOnFailure.IsChecked == true;
+        _configStore.Save(_settings);
+    }
+
+    private async void RegisterTaskBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        SaveScheduledUiSettings();
+        SetBusy(true, "Registering Windows Scheduled Task for silent driver updates...");
+        var (ok, msg) = await _taskService.RegisterOrUpdateTaskAsync(_settings, AppendLog);
+        if (ok)
+        {
+            _settings.ScheduledTaskEnabled = true;
+            _configStore.Save(_settings);
+        }
+        await RefreshScheduledTaskStatusAsync();
+        SetBusy(false, msg);
+        DarkDialog.Show(msg, "Scheduled Silent Updates", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private async void RunSilentNowBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        SaveScheduledUiSettings();
+        SetBusy(true, "Running silent driver update check, download, and install...");
+        var result = await _silentUpdateService.RunSilentUpdateAsync(_settings, AppendLog);
+        await RefreshHardwareAndStoreAsync();
+        await RefreshScheduledTaskStatusAsync();
+        SetBusy(false, result.Summary);
+        DarkDialog.Show(
+            $"{result.Summary}\n\nLog file:\n{result.LogFilePath}",
+            "Silent Driver Update Run",
+            result.Success ? DarkDialogKind.Success : DarkDialogKind.Warning,
+            this);
+    }
+
+    private async void TestAlertBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        SaveScheduledUiSettings();
+        SetBusy(true, "Sending test alert to xServer xSecurity & connected devices...");
+        var logPath = Path.Combine(_settings.LogDirectory, "scheduled-update-latest.log");
+        var (ok, msg) = await _alertService.SendTestAlertAsync(_settings, logPath, AppendLog);
+        SetBusy(false, msg);
+        DarkDialog.Show(msg, "xSecurity Alert Test", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private void OpenLogsFolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        Directory.CreateDirectory(_settings.LogDirectory);
+        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{_settings.LogDirectory}\"") { UseShellExecute = true });
+    }
+
+    private async void RemoveTaskBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        SetBusy(true, "Removing scheduled silent driver update task...");
+        var (ok, msg) = await _taskService.RemoveTaskAsync(AppendLog);
+        if (ok)
+        {
+            _settings.ScheduledTaskEnabled = false;
+            _configStore.Save(_settings);
+        }
+        await RefreshScheduledTaskStatusAsync();
+        SetBusy(false, msg);
+        DarkDialog.Show(msg, "Scheduled Silent Updates", ok ? DarkDialogKind.Info : DarkDialogKind.Warning, this);
     }
 }

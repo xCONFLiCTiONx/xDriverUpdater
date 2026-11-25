@@ -89,6 +89,49 @@
               </Border>
             </UniformGrid>
 
+            <!-- Scheduled Silent Updates & xSecurity Alerts Card -->
+            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+              <StackPanel>
+                <Grid Margin="0,0,0,8">
+                  <TextBlock Text="SCHEDULED SILENT UPDATES &amp; xSECURITY ALERTS" FontSize="11" FontWeight="Bold" Foreground="#60A5FA" VerticalAlignment="Center"/>
+                  <TextBlock x:Name="ScheduledTaskStatusText" HorizontalAlignment="Right" Text="Checking Windows Task Scheduler..." Foreground="{StaticResource TextMutedBrush}" FontSize="11.5"/>
+                </Grid>
+
+                <Grid Margin="0,0,0,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="120"/>
+                    <ColumnDefinition Width="95"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                    <TextBlock Text="Frequency" Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,0,0,3"/>
+                    <ComboBox x:Name="SchedFreqCombo">
+                      <ComboBoxItem Content="Daily" IsSelected="True"/>
+                      <ComboBoxItem Content="Weekly"/>
+                    </ComboBox>
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                    <TextBlock Text="Time (24h)" Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,0,0,3"/>
+                    <TextBox x:Name="SchedTimeBox" Text="03:00" ToolTip="24-hour time in HH:mm format (e.g. 03:00)"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2">
+                    <TextBlock Text="xServer xSecurity Events Endpoint" Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,0,0,3"/>
+                    <TextBox x:Name="XSecurityUrlBox" ToolTip="xSecurity events ingest URL (notifies xSecurity module &amp; broadcasts toast alerts to all connected devices)"/>
+                  </StackPanel>
+                </Grid>
+
+                <CheckBox x:Name="ChkLocalToastOnFailure" Content="Also show local Windows toast notification on failure (in addition to xServer/xSecurity broadcast to all connected devices)" Margin="0,0,0,10" Checked="SettingCheck_Changed" Unchecked="SettingCheck_Changed"/>
+
+                <WrapPanel>
+                  <Button x:Name="RegisterTaskBtn" Content="Save &amp; Register Scheduled Task" Style="{StaticResource PrimaryButton}" Click="RegisterTaskBtn_Click" Margin="0,0,8,4"/>
+                  <Button x:Name="RunSilentNowBtn" Content="Run Silent Update Now" Style="{StaticResource SuccessButton}" Click="RunSilentNowBtn_Click" Margin="0,0,8,4"/>
+                  <Button x:Name="TestAlertBtn" Content="Test xSecurity Alert" Click="TestAlertBtn_Click" Margin="0,0,8,4"/>
+                  <Button x:Name="OpenLogsFolderBtn" Content="Open Logs Folder" Click="OpenLogsFolderBtn_Click" Margin="0,0,8,4"/>
+                  <Button x:Name="RemoveTaskBtn" Content="Remove Task" Style="{StaticResource DangerButton}" Click="RemoveTaskBtn_Click" Margin="0,0,0,4"/>
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+
             <!-- Smart Audit Findings -->
             <Border Style="{StaticResource CardBorder}">
               <StackPanel>
