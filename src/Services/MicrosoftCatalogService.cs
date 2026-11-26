@@ -150,9 +150,7 @@ public sealed class MicrosoftCatalogService
 
             DateTime? relDate = DateTime.TryParse(lastUpdatedStr, out var dt) ? dt : null;
             long sizeBytes = ParseSize(sizeStr);
-            // The Microsoft inbox monitor.inf date/provider is not evidence that a catalog
-            // package is newer or compatible. Compare the actual package version instead.
-            bool isNewer = DirectManufacturerService.IsVersionNewer(version, device.DriverVersion);
+            bool isNewer = IsCatalogCandidateNewer(device, version, relDate);
 
             list.Add(new DriverUpdateCandidate
             {
@@ -205,6 +203,33 @@ public sealed class MicrosoftCatalogService
         var html = await resp.Content.ReadAsStringAsync(ct);
         var m = CabUrlRegex.Match(html);
         return m.Success ? m.Value : null;
+    }
+
+    private static bool IsCatalogCandidateNewer(DriverDevice device, string candidateVersion, DateTime? catalogDate)
+    {
+        if (!DirectManufacturerService.IsVersionNewer(candidateVersion, device.DriverVersion))
+            return false;
+
+        // Windows PnP ranks drivers by DriverDate before DriverVersion, and vendors such as
+        // Realtek ship parallel branches with different major version schemes (e.g. NDIS 10.x
+        // vs NetAdapterCx 1168.x). Never treat an older catalog package as a newer update.
+        bool hasRealInstalledDate = device.DriverDate.HasValue &&
+            !(device.DriverDate.Value.Year == 2006 && device.DriverDate.Value.Month == 6 && device.DriverDate.Value.Day == 21);
+
+        if (hasRealInstalledDate && catalogDate.HasValue && catalogDate.Value.Date < device.DriverDate!.Value.Date)
+            return false;
+
+        var candParsed = DirectManufacturerService.ParseComparableVersion(candidateVersion);
+        var instParsed = DirectManufacturerService.ParseComparableVersion(device.DriverVersion);
+        bool crossBranchMajorJump = instParsed.Major > 0 && instParsed.Major < 100 && candParsed.Major >= 100;
+        if (crossBranchMajorJump)
+        {
+            if (!hasRealInstalledDate || !catalogDate.HasValue)
+                return false;
+            return catalogDate.Value.Date > device.DriverDate!.Value.Date;
+        }
+
+        return true;
     }
 
     private static string CleanHtml(string raw)

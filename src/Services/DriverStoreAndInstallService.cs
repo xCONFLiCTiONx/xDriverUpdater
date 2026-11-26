@@ -357,7 +357,7 @@ public sealed class DriverStoreAndInstallService
                 log?.Invoke($"[PnPUtil] Staging & installing INF drivers in folder: {fileOrFolderPath}");
                 var (exit, output) = RunProcess("pnputil.exe", $"/add-driver \"{Path.Combine(fileOrFolderPath, "*.inf")}\" /subdirs /install");
                 log?.Invoke(output.Trim());
-                return (exit is 0 or 3010, exit == 3010, output.Trim());
+                return EvaluatePnpUtilInstallResult(exit, output);
             }
 
             if (!File.Exists(fileOrFolderPath))
@@ -369,7 +369,7 @@ public sealed class DriverStoreAndInstallService
                 log?.Invoke($"[PnPUtil] Installing INF: {fileOrFolderPath}");
                 var (exit, output) = RunProcess("pnputil.exe", $"/add-driver \"{fileOrFolderPath}\" /install");
                 log?.Invoke(output.Trim());
-                return (exit is 0 or 3010, exit == 3010, output.Trim());
+                return EvaluatePnpUtilInstallResult(exit, output);
             }
 
             if (ext is ".zip" or ".cab")
@@ -394,7 +394,7 @@ public sealed class DriverStoreAndInstallService
                     log?.Invoke($"[PnPUtil] Installing extracted INF driver(s)...");
                     var (exit, output) = RunProcess("pnputil.exe", $"/add-driver \"{Path.Combine(extractDir, "*.inf")}\" /subdirs /install");
                     log?.Invoke(output.Trim());
-                    return (exit is 0 or 3010, exit == 3010, output.Trim());
+                    return EvaluatePnpUtilInstallResult(exit, output);
                 }
                 finally
                 {
@@ -404,6 +404,29 @@ public sealed class DriverStoreAndInstallService
 
             return (false, false, $"Unsupported file extension: {ext}. Expected .inf, .cab, .zip, or a driver folder.");
         }, ct);
+    }
+
+    private static (bool Success, bool RebootRequired, string Message) EvaluatePnpUtilInstallResult(int exitCode, string output)
+    {
+        var trimmed = (output ?? "").Trim();
+        if (exitCode == 0)
+            return (true, false, string.IsNullOrWhiteSpace(trimmed) ? "Driver package installed successfully." : trimmed);
+        if (exitCode == 3010)
+            return (true, true, string.IsNullOrWhiteSpace(trimmed) ? "Driver package installed successfully (reboot required)." : trimmed);
+
+        // pnputil returns 259 (ERROR_NO_MORE_ITEMS) when the package already exists in the
+        // Driver Store and/or Windows determines the device is already up-to-date.
+        if (exitCode == 259)
+        {
+            bool hasFailure = trimmed.Contains("Failed", StringComparison.OrdinalIgnoreCase) ||
+                              trimmed.Contains("Error", StringComparison.OrdinalIgnoreCase);
+            bool alreadyUpToDate = trimmed.Contains("up-to-date on device", StringComparison.OrdinalIgnoreCase) ||
+                                   trimmed.Contains("Already exists in the system", StringComparison.OrdinalIgnoreCase);
+            if (alreadyUpToDate && !hasFailure)
+                return (true, false, "Driver package is already installed and up-to-date on this device.");
+        }
+
+        return (false, false, $"pnputil exited with code {exitCode}: {trimmed}");
     }
 
     public static void OpenUrl(string url)
