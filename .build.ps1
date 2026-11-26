@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-    Build (and optionally deploy/run) xDriverUpdater.
+    Build (and optionally deploy/run) xSystemForge.
 .EXAMPLE
-    .\.build.ps1                     # Release build & deploy to %LOCALAPPDATA%\xPrograms\xDriverUpdater
+    .\.build.ps1                     # Release build & deploy to %LOCALAPPDATA%\xPrograms\xSystemForge
     .\.build.ps1 -Clean -Run         # wipe bin/obj, rebuild, deploy, launch
 #>
 [CmdletBinding()]
@@ -13,17 +13,18 @@ param(
     [switch]$Run
 )
 
+Clear-Host
 $ErrorActionPreference = 'Stop'
 $root    = $PSScriptRoot
 $project = Join-Path $root 'src\xDriverUpdater.csproj'
-$exe     = Join-Path $root "src\bin\$Configuration\net8.0-windows\xDriverUpdater.exe"
+$exe     = Join-Path $root "src\bin\$Configuration\net8.0-windows\xSystemForge.exe"
 
 # Stop any running instance so the exe isn't locked (ignore Access Denied if elevated instance is open).
 try {
-    Get-Process -Name xDriverUpdater -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Stop
+    Get-Process -Name xSystemForge,xDriverUpdater -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Stop
     Start-Sleep -Milliseconds 400
 } catch {
-    Write-Host "Note: xDriverUpdater is currently running elevated. Close it before deploying." -ForegroundColor Yellow
+    Write-Host "Note: xSystemForge is currently running elevated. Close it before deploying." -ForegroundColor Yellow
 }
 
 if ($Clean) {
@@ -40,15 +41,15 @@ if (-not (Test-Path -LiteralPath $exe)) { throw "Build succeeded but output not 
 Write-Host "Built: $exe" -ForegroundColor Green
 
 if ($Configuration -eq 'Release') {
-    $deployDir = Join-Path $env:LOCALAPPDATA 'xPrograms\xDriverUpdater'
+    $deployDir = Join-Path $env:LOCALAPPDATA 'xPrograms\xSystemForge'
     $releaseBinDir = Split-Path -Parent $exe
     New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
     Copy-Item -Path "$releaseBinDir\*" -Destination $deployDir -Recurse -Force
-    $exe = Join-Path $deployDir 'xDriverUpdater.exe'
+    $exe = Join-Path $deployDir 'xSystemForge.exe'
     Write-Host "Deployed: $exe" -ForegroundColor Green
 }
 
 if ($Run) {
     Start-Process -FilePath $exe
-    Write-Host 'Started xDriverUpdater.'
+    Write-Host 'Started xSystemForge.'
 }

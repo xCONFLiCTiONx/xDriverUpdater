@@ -11,19 +11,20 @@ param(
 )
 
 Set-StrictMode -Version Latest
+Clear-Host
 $ErrorActionPreference = "Stop"
 
 $repoRoot      = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = $repoRoot
 }
-$folderName    = "xDriverUpdater"
-$appName       = "xDriverUpdater"
-$installerBase = "xDriverUpdater-Setup"
-$exeName       = "xDriverUpdater.exe"
-$version       = "1.0.0"
+$folderName    = "xSystemForge"
+$appName       = "xSystemForge"
+$installerBase = "xSystemForge-Setup"
+$exeName       = "xSystemForge.exe"
+$version       = "2.0.0"
 $appId         = "E7C3A914-5B2D-4F8A-9C1E-6D4B8A2F7E05"
-$description   = "Smart Hardware-Aware Windows Driver Manager and Dual-Source Updater"
+$description   = "All-in-One Windows Driver, Telemetry, Debloat and Privacy Suite"
 $installDir    = Join-Path $env:LOCALAPPDATA "xPrograms\$folderName"
 $sourceDir     = Join-Path $repoRoot "src\bin\Release\net8.0-windows"
 $repoIcon      = Join-Path $repoRoot "src\icon.ico"

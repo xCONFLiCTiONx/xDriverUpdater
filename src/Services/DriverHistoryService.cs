@@ -36,10 +36,22 @@ public sealed class DriverHistoryService
 
     public DriverHistoryService()
     {
-        var dir = Path.Combine(
+        var baseDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "xPrograms", "xDriverUpdater");
+            "xPrograms");
+        var dir = Path.Combine(baseDir, "xSystemForge");
         _historyPath = Path.Combine(dir, "history.json");
+
+        var legacy = Path.Combine(baseDir, "xDriverUpdater", "history.json");
+        if (!File.Exists(_historyPath) && File.Exists(legacy))
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                File.Copy(legacy, _historyPath, overwrite: false);
+            }
+            catch { }
+        }
     }
 
     public List<DriverHistoryEntry> LoadHistory()

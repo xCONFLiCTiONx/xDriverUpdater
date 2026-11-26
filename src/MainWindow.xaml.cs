@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using xDriverUpdater.Models;
 using xDriverUpdater.Services;
@@ -29,6 +30,10 @@ public partial class MainWindow : Window
     private readonly SilentDriverUpdateService _silentUpdateService = new();
     private readonly XSecurityAlertService _alertService = new();
     private readonly DriverHistoryService _historyService = new();
+    private readonly TelemetryScanner _telemetryScanner = new();
+    private readonly TelemetryController _telemetryController = new();
+    private readonly NetworkMonitor _networkMonitor = new();
+    private readonly DispatcherTimer _monitorTimer = new() { Interval = TimeSpan.FromSeconds(2) };
 
     private AppSettings _settings = new();
     private SystemProfile _profile = new();
@@ -36,6 +41,10 @@ public partial class MainWindow : Window
     private List<DriverStorePackage> _storePackages = new();
     private List<DriverUpdateCandidate> _allUpdates = new();
     private List<DeviceUpdateGroup> _updateGroups = new();
+    private List<TelemetryItem> _telemetryItems = new();
+    private List<LiveConnection> _liveConnections = new();
+    private bool _monitorPaused;
+    private bool _monitorBusy;
     private bool _loadingSettings;
     private bool _isBusy;
 
@@ -44,6 +53,7 @@ public partial class MainWindow : Window
         _settings = _configStore.Load();
         InitializeComponent();
         RestoreWindowPlacement();
+        _monitorTimer.Tick += async (_, _) => await RefreshLiveMonitorAsync();
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
     }
@@ -99,6 +109,7 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
+        _monitorTimer.Stop();
         try
         {
             var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
@@ -118,7 +129,7 @@ public partial class MainWindow : Window
         ReposGrid.ItemsSource = _settings.Repositories;
         RepoPresetCombo.ItemsSource = RepositoryManagerService.GetPublicRepositoryPresets().Select(p => p.Name).ToList();
         if (RepoPresetCombo.Items.Count > 0) RepoPresetCombo.SelectedIndex = 0;
-        await Task.WhenAll(RefreshHardwareAndStoreAsync(), RefreshScheduledTaskStatusAsync());
+        await Task.WhenAll(RefreshHardwareAndStoreAsync(), RefreshScheduledTaskStatusAsync(), RefreshTelemetryAsync());
     }
 
     private void ApplySettingsToUi()
@@ -233,8 +244,8 @@ public partial class MainWindow : Window
         AuditSummaryText.Text = $"{findings.Count} audit check(s)";
 
         UpdatesTabItem.Header = _updateGroups.Count > 0
-            ? $"Updates Available ({devicesWithNewer} new / {_updateGroups.Count} devices)"
-            : "Updates Available";
+            ? $"Driver Updates ({devicesWithNewer} new)"
+            : "Driver Updates";
 
         CleanAllStaleBtn.Content = staleStore > 0
             ? $"Clean All Stale Packages ({staleStore})"
@@ -1096,5 +1107,274 @@ public partial class MainWindow : Window
         await RefreshScheduledTaskStatusAsync();
         SetBusy(false, msg);
         DarkDialog.Show(msg, "Scheduled Silent Updates", ok ? DarkDialogKind.Info : DarkDialogKind.Warning, this);
+    }
+
+    // ==================== TELEMETRY, DEBLOAT & LIVE OUTBOUND MONITOR ====================
+
+    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.Source != MainTabs) return;
+        bool onMonitor = MainTabs.SelectedItem == LiveMonitorTabItem;
+        if (onMonitor && !_monitorPaused)
+        {
+            _monitorTimer.Start();
+            _ = RefreshLiveMonitorAsync();
+        }
+        else
+        {
+            _monitorTimer.Stop();
+        }
+    }
+
+    private async Task RefreshTelemetryAsync()
+    {
+        try
+        {
+            var items = await _telemetryScanner.ScanAllAsync();
+            _telemetryItems = items;
+            Dispatcher.Invoke(() =>
+            {
+                int activeCount = _telemetryItems.Count(t => t.IsActive);
+                int safeActive = _telemetryItems.Count(t => t.IsActive && t.Risk == RiskLevel.Safe);
+                TelemetryTabItem.Header = activeCount > 0
+                    ? $"Telemetry & Debloat ({activeCount})"
+                    : "Telemetry & Debloat";
+                ApplyTelemetryFilters();
+                AppendLog($"[Telemetry] Scan complete: {_telemetryItems.Count} controls ({activeCount} active, {safeActive} safe to disable/remove).");
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Telemetry] Scan error: {ex.Message}");
+        }
+    }
+
+    private void TelemetryFilter_Changed(object sender, EventArgs e)
+    {
+        ApplyTelemetryFilters();
+    }
+
+    private void ApplyTelemetryFilters()
+    {
+        if (TelemetryGrid == null) return;
+        var q = _telemetryItems.AsEnumerable();
+        var search = TelemetrySearchBox?.Text?.Trim() ?? "";
+        var cat = (TelemetryCategoryFilter?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Categories";
+        var risk = (TelemetryRiskFilter?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Risks";
+        var stat = (TelemetryStatusFilter?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All Statuses";
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            q = q.Where(t =>
+                t.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                t.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                t.Vendor.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                t.Description.Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (cat != "All Categories")
+            q = q.Where(t => t.CategoryLabel.Equals(cat, StringComparison.OrdinalIgnoreCase));
+
+        if (risk != "All Risks")
+            q = q.Where(t => t.RiskLabel.Equals(risk, StringComparison.OrdinalIgnoreCase));
+
+        if (stat.StartsWith("Active"))
+            q = q.Where(t => t.IsActive);
+        else if (stat.StartsWith("Hardened"))
+            q = q.Where(t => !t.IsActive);
+
+        TelemetryGrid.ItemsSource = q.ToList();
+    }
+
+    private void TelSelectSafeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in _telemetryItems)
+            item.IsSelected = item.IsActive && item.Risk == RiskLevel.Safe;
+    }
+
+    private void TelSelectAllActiveBtn_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in _telemetryItems)
+            item.IsSelected = item.IsActive;
+    }
+
+    private void TelClearSelBtn_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var item in _telemetryItems)
+            item.IsSelected = false;
+    }
+
+    private async void TelDisableSelectedBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _telemetryItems.Where(t => t.IsSelected && t.IsActive).ToList();
+        if (selected.Count == 0)
+        {
+            DarkDialog.Show("Select one or more active telemetry or bloat items first (tip: click 'Select Safe Active').", "Telemetry & Debloat", DarkDialogKind.Info, this);
+            return;
+        }
+
+        if (!DarkDialog.Confirm($"Disable / remove {selected.Count} selected item(s)?\n\nServices, tasks, registry policies, and startup items can be restored anytime; removed Appx packages can be reinstalled from Microsoft Store.", "Confirm Harden / Debloat", DarkDialogKind.Question, this))
+            return;
+
+        int okCount = 0;
+        await Task.Run(() =>
+        {
+            foreach (var item in selected)
+            {
+                var (ok, msg) = _telemetryController.DisableItem(item);
+                if (ok) okCount++;
+                AppendLog($"[Telemetry] {msg}");
+                item.IsSelected = false;
+            }
+        });
+
+        await RefreshTelemetryAsync();
+        StatusFooterText.Text = $"Hardened / removed {okCount}/{selected.Count} item(s).";
+    }
+
+    private async void TelRestoreSelectedBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _telemetryItems.Where(t => t.IsSelected && !t.IsActive && t.Category != TelemetryCategory.AppxBloat).ToList();
+        if (selected.Count == 0)
+        {
+            DarkDialog.Show("Select one or more hardened services, tasks, registry policies, or startup entries to restore.", "Telemetry & Debloat", DarkDialogKind.Info, this);
+            return;
+        }
+
+        int okCount = 0;
+        await Task.Run(() =>
+        {
+            foreach (var item in selected)
+            {
+                var (ok, msg) = _telemetryController.RestoreItem(item);
+                if (ok) okCount++;
+                AppendLog($"[Telemetry] {msg}");
+                item.IsSelected = false;
+            }
+        });
+
+        await RefreshTelemetryAsync();
+        StatusFooterText.Text = $"Restored {okCount}/{selected.Count} item(s).";
+    }
+
+    private async void TelRowActionBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not TelemetryItem item) return;
+        if (item.Category == TelemetryCategory.AppxBloat && !item.IsActive) return;
+
+        if (item.Category == TelemetryCategory.AppxBloat &&
+            !DarkDialog.Confirm($"Remove Appx package '{item.DisplayName}' ({item.AppxPackageName})?", "Remove Appx Package", DarkDialogKind.Question, this))
+            return;
+
+        var (ok, msg) = await Task.Run(() => item.IsActive
+            ? _telemetryController.DisableItem(item)
+            : _telemetryController.RestoreItem(item));
+        AppendLog($"[Telemetry] {msg}");
+        StatusFooterText.Text = msg;
+        await RefreshTelemetryAsync();
+    }
+
+    private async void TelRescanBtn_Click(object sender, RoutedEventArgs e)
+    {
+        StatusFooterText.Text = "Rescanning Windows telemetry, services, tasks, policies & Appx bloat...";
+        await RefreshTelemetryAsync();
+        StatusFooterText.Text = "Telemetry & Debloat scan complete.";
+    }
+
+    private async Task RefreshLiveMonitorAsync()
+    {
+        if (_monitorBusy) return;
+        _monitorBusy = true;
+        try
+        {
+            var conns = await Task.Run(() =>
+            {
+                var blocked = _telemetryController.GetBlockedExecutablePaths();
+                return _networkMonitor.CaptureOutboundConnections(blocked);
+            });
+            _liveConnections = conns;
+            Dispatcher.Invoke(ApplyMonitorFilters);
+        }
+        catch { }
+        finally
+        {
+            _monitorBusy = false;
+        }
+    }
+
+    private void MonitorFilter_Changed(object sender, EventArgs e)
+    {
+        ApplyMonitorFilters();
+    }
+
+    private void ApplyMonitorFilters()
+    {
+        if (LiveConnectionsGrid == null) return;
+        var q = _liveConnections.AsEnumerable();
+        var search = MonitorSearchBox?.Text?.Trim() ?? "";
+        if (ChkMonitorFlaggedOnly?.IsChecked == true)
+            q = q.Where(c => c.IsSuspectedTelemetry);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            q = q.Where(c =>
+                c.ProcessName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                c.RemoteAddress.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                c.RemoteHost.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                c.TelemetryReason.Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var list = q.ToList();
+        LiveConnectionsGrid.ItemsSource = list;
+        int flagged = _liveConnections.Count(c => c.IsSuspectedTelemetry);
+        int blocked = _liveConnections.Count(c => c.IsFirewallBlocked);
+        MonitorStatsText.Text = $"{_liveConnections.Count} outbound  •  {flagged} flagged  •  {blocked} blocked";
+    }
+
+    private void MonitorPauseBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _monitorPaused = !_monitorPaused;
+        MonitorPauseBtn.Content = _monitorPaused ? "Resume" : "Pause";
+        if (_monitorPaused)
+            _monitorTimer.Stop();
+        else if (MainTabs.SelectedItem == LiveMonitorTabItem)
+            _monitorTimer.Start();
+    }
+
+    private async void MonitorRefreshBtn_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshLiveMonitorAsync();
+    }
+
+    private async void MonitorFirewallBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not LiveConnection conn) return;
+        bool block = !conn.IsFirewallBlocked;
+        var (ok, msg) = await Task.Run(() => _telemetryController.SetFirewallOutboundBlock(conn.ProcessPath, conn.ProcessName, block));
+        AppendLog($"[Firewall] {msg}");
+        StatusFooterText.Text = msg;
+        if (ok) conn.IsFirewallBlocked = block;
+        await RefreshLiveMonitorAsync();
+    }
+
+    private async void MonitorKillBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not LiveConnection conn) return;
+        if (!DarkDialog.Confirm($"Terminate process '{conn.ProcessName}' (PID {conn.Pid})?", "Kill Process", DarkDialogKind.Question, this))
+            return;
+
+        try
+        {
+            using var proc = Process.GetProcessById(conn.Pid);
+            proc.Kill(entireProcessTree: false);
+            AppendLog($"[Monitor] Terminated process {conn.ProcessName} (PID {conn.Pid}).");
+            StatusFooterText.Text = $"Terminated {conn.ProcessName} (PID {conn.Pid}).";
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[Monitor] Could not terminate {conn.ProcessName}: {ex.Message}");
+            DarkDialog.Show($"Failed to terminate {conn.ProcessName}: {ex.Message}", "Kill Process", DarkDialogKind.Warning, this);
+        }
+        await RefreshLiveMonitorAsync();
     }
 }
