@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private readonly ScheduledTaskService _taskService = new();
     private readonly SilentDriverUpdateService _silentUpdateService = new();
     private readonly XSecurityAlertService _alertService = new();
+    private readonly DriverHistoryService _historyService = new();
 
     private AppSettings _settings = new();
     private SystemProfile _profile = new();
@@ -115,6 +116,8 @@ public partial class MainWindow : Window
     {
         ApplySettingsToUi();
         ReposGrid.ItemsSource = _settings.Repositories;
+        RepoPresetCombo.ItemsSource = RepositoryManagerService.GetPublicRepositoryPresets().Select(p => p.Name).ToList();
+        if (RepoPresetCombo.Items.Count > 0) RepoPresetCombo.SelectedIndex = 0;
         await Task.WhenAll(RefreshHardwareAndStoreAsync(), RefreshScheduledTaskStatusAsync());
     }
 
@@ -156,6 +159,8 @@ public partial class MainWindow : Window
         ScanDirectAndReposBtn.IsEnabled = !busy;
         InstallSelectedUpdatesBtn.IsEnabled = !busy;
         BackupAllDriversBtn.IsEnabled = !busy;
+        ExportOfflinePackBtn.IsEnabled = !busy;
+        RestoreBackupBtn.IsEnabled = !busy;
         InstallLocalDriverBtn.IsEnabled = !busy;
         DeleteStorePkgBtn.IsEnabled = !busy;
         CleanAllStaleBtn.IsEnabled = !busy && _storePackages.Any(p => p.IsSuperseded && !p.IsInUse);
@@ -371,15 +376,16 @@ public partial class MainWindow : Window
 
                 var first = orderedVersions[0];
                 var dev = _allDevices.FirstOrDefault(d => d.DeviceId == first.DeviceId);
+                bool isPinned = !string.IsNullOrWhiteSpace(first.DeviceId) && _settings.PinnedDevices.ContainsKey(first.DeviceId);
                 return new DeviceUpdateGroup
                 {
                     DeviceId = first.DeviceId,
-                    DeviceName = first.DeviceName,
+                    DeviceName = isPinned ? $"{first.DeviceName} [PINNED]" : first.DeviceName,
                     Category = dev?.Category ?? "",
                     InstalledVersion = first.InstalledVersion,
                     Versions = orderedVersions,
                     SelectedVersion = first,
-                    IsSelected = first.IsNewerThanInstalled
+                    IsSelected = first.IsNewerThanInstalled && !isPinned
                 };
             })
             .OrderByDescending(g => g.HasNewerVersion)
@@ -404,13 +410,43 @@ public partial class MainWindow : Window
         if (UpdatesGrid?.SelectedItem is not DeviceUpdateGroup g || g.SelectedVersion is not DriverUpdateCandidate u)
         {
             if (OpenUpdateUrlBtn != null) OpenUpdateUrlBtn.IsEnabled = false;
+            if (PinUpdateDeviceBtn != null) PinUpdateDeviceBtn.IsEnabled = false;
             return;
         }
 
+        bool isPinned = !string.IsNullOrWhiteSpace(g.DeviceId) && _settings.PinnedDevices.ContainsKey(g.DeviceId);
         var actionTag = u.IsNewerThanInstalled ? "Upgrade" : "Pin / Rollback";
         SelectedUpdateTitle.Text = $"{g.DeviceName}  —  {g.InstalledVersion} → v{u.Version} ({actionTag} • {g.Versions.Count} version(s) available)";
         SelectedUpdateDetail.Text = $"Package: {u.Title}  •  Source: {u.SourceLabel}  •  Channel: {u.Channel.ToUpperInvariant()}  •  Date: {u.ReleaseDateText}\n{u.ReleaseNotes}";
         OpenUpdateUrlBtn.IsEnabled = !string.IsNullOrWhiteSpace(u.DownloadUrl);
+        PinUpdateDeviceBtn.IsEnabled = !string.IsNullOrWhiteSpace(g.DeviceId);
+        PinUpdateDeviceBtn.Content = isPinned ? "Unpin Device" : "Pin Current Version";
+    }
+
+    private void PinUpdateDeviceBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (UpdatesGrid.SelectedItem is not DeviceUpdateGroup g || string.IsNullOrWhiteSpace(g.DeviceId)) return;
+        TogglePinDevice(g.DeviceId, g.DeviceName.Replace(" [PINNED]", ""), g.InstalledVersion);
+        ApplyUpdateSourceFilter();
+        RefreshSelectedUpdateDetails();
+    }
+
+    private void TogglePinDevice(string deviceId, string deviceName, string currentVersion)
+    {
+        if (_settings.PinnedDevices.ContainsKey(deviceId))
+        {
+            _settings.PinnedDevices.Remove(deviceId);
+            _configStore.Save(_settings);
+            AppendLog($"[Pin] Unpinned {deviceName} — updates will now apply normally.");
+            StatusFooterText.Text = $"Unpinned {deviceName}.";
+        }
+        else
+        {
+            _settings.PinnedDevices[deviceId] = currentVersion;
+            _configStore.Save(_settings);
+            AppendLog($"[Pin] Pinned {deviceName} at v{currentVersion} — skipped by scheduled silent updates.");
+            StatusFooterText.Text = $"Pinned {deviceName} at v{currentVersion}.";
+        }
     }
 
     private void OpenUpdateUrlBtn_Click(object sender, RoutedEventArgs e)
@@ -493,6 +529,17 @@ public partial class MainWindow : Window
                 if (ok) succeeded++;
                 if (reboot) anyReboot = true;
                 AppendLog($"[{cand.Title}] {msg}");
+                _historyService.Record(new DriverHistoryEntry
+                {
+                    Action = cand.IsNewerThanInstalled ? "Install" : "Rollback",
+                    DeviceName = cand.DeviceName,
+                    DeviceId = cand.DeviceId,
+                    FromVersion = cand.InstalledVersion,
+                    ToVersion = cand.Version,
+                    Source = cand.SourceLabel,
+                    Success = ok,
+                    Message = msg
+                });
             }
 
             SetBusy(false, $"Finished: {succeeded}/{selected.Count} completed." + (anyReboot ? " Reboot recommended." : ""));
@@ -560,11 +607,13 @@ public partial class MainWindow : Window
             DevOemBtn.IsEnabled = false;
             DevDirectBtn.IsEnabled = false;
             DevBackupBtn.IsEnabled = false;
+            DevPinBtn.IsEnabled = false;
             DevCopyHwidBtn.IsEnabled = false;
             return;
         }
 
-        InspectorDeviceTitle.Text = $"{d.DisplayName}  (v{d.DriverVersion}, {d.DriverDateText})";
+        bool isPinned = !string.IsNullOrWhiteSpace(d.DeviceId) && _settings.PinnedDevices.ContainsKey(d.DeviceId);
+        InspectorDeviceTitle.Text = $"{d.DisplayName}  (v{d.DriverVersion}, {d.DriverDateText}){(isPinned ? "  [PINNED]" : "")}";
         var subsysInfo = !string.IsNullOrEmpty(d.SubsystemVendorId)
             ? $"SUBSYS SVID: {d.SubsystemVendorId} ({(string.IsNullOrEmpty(d.SubsystemOemName) ? "Unknown OEM" : d.SubsystemOemName)})"
             : $"Bus: {d.BusType}";
@@ -579,6 +628,8 @@ public partial class MainWindow : Window
         DevDirectBtn.IsEnabled = !string.IsNullOrWhiteSpace(d.DirectVendorUrl);
         DevDirectBtn.Content = $"Open {d.SiliconVendor} Direct Site";
         DevBackupBtn.IsEnabled = d.InfName.StartsWith("oem", StringComparison.OrdinalIgnoreCase);
+        DevPinBtn.IsEnabled = !string.IsNullOrWhiteSpace(d.DeviceId);
+        DevPinBtn.Content = isPinned ? "Unpin Device" : "Pin Current Version";
         DevCopyHwidBtn.IsEnabled = !string.IsNullOrWhiteSpace(primaryHwid);
     }
 
@@ -607,6 +658,13 @@ public partial class MainWindow : Window
         var (ok, msg) = await _storeService.ExportSingleDriverBackupAsync(d.InfName, _settings.BackupDirectory, AppendLog);
         SetBusy(false, msg);
         DarkDialog.Show(msg, "Driver Backup", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private void DevPinBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (DevicesGrid.SelectedItem is not DriverDevice d || string.IsNullOrWhiteSpace(d.DeviceId)) return;
+        TogglePinDevice(d.DeviceId, d.DisplayName, d.DriverVersion);
+        DevicesGrid_SelectionChanged(DevicesGrid, null!);
     }
 
     private void DevCopyHwidBtn_Click(object sender, RoutedEventArgs e)
@@ -679,6 +737,34 @@ public partial class MainWindow : Window
         AppendLog($"Added custom repository: '{name}' ({url})");
     }
 
+    private void AddPresetRepoBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var presets = RepositoryManagerService.GetPublicRepositoryPresets();
+        var idx = RepoPresetCombo.SelectedIndex;
+        if (idx < 0 || idx >= presets.Count) return;
+
+        var preset = presets[idx];
+        if (_settings.Repositories.Any(r => r.UrlOrPath.Equals(preset.UrlOrPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            DarkDialog.Show($"'{preset.Name}' is already in your repository list.", "Repositories", DarkDialogKind.Info, this);
+            return;
+        }
+
+        _settings.Repositories.Add(new RepositorySourceConfig
+        {
+            Name = preset.Name,
+            UrlOrPath = preset.UrlOrPath,
+            Description = preset.Description,
+            Enabled = true,
+            IsBuiltIn = false,
+            LastStatus = "Added (click Save & Sync)"
+        });
+        _configStore.Save(_settings);
+        ReposGrid.ItemsSource = null;
+        ReposGrid.ItemsSource = _settings.Repositories;
+        AppendLog($"Added preset repository: '{preset.Name}' ({preset.UrlOrPath})");
+    }
+
     private void RemoveRepoBtn_Click(object sender, RoutedEventArgs e)
     {
         if (ReposGrid.SelectedItem is not RepositorySourceConfig repo) return;
@@ -725,6 +811,76 @@ public partial class MainWindow : Window
         var (ok, outDir, msg) = await _storeService.ExportAllDriversBackupAsync(_settings.BackupDirectory, AppendLog);
         SetBusy(false, msg);
         DarkDialog.Show(msg, "Full Driver Backup", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private async void ExportOfflinePackBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        var folderDlg = new OpenFolderDialog
+        {
+            Title = "Choose Destination Folder for Portable Offline Driver Pack (e.g. USB drive or backup folder)",
+            InitialDirectory = Directory.Exists(_settings.BackupDirectory) ? _settings.BackupDirectory : Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+        };
+        if (folderDlg.ShowDialog() != true) return;
+
+        SetBusy(true, "Building Portable Offline Driver Pack (exporting drivers + restore script)...");
+        var (ok, packDir, msg) = await _storeService.ExportPortableOfflineDriverPackAsync(folderDlg.FolderName, _profile, _allDevices, AppendLog);
+        SetBusy(false, ok ? $"Portable Offline Driver Pack created: {packDir}" : "Offline pack export failed.");
+        DarkDialog.Show(msg, "Portable Offline Driver Pack", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private async void RestoreBackupBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        Directory.CreateDirectory(_settings.BackupDirectory);
+        var folderDlg = new OpenFolderDialog
+        {
+            Title = "Select a Backed-Up Driver Folder to Restore / Rollback",
+            InitialDirectory = _settings.BackupDirectory
+        };
+        if (folderDlg.ShowDialog() != true) return;
+
+        if (!DarkDialog.Confirm(
+            $"Restore / rollback drivers from:\n{folderDlg.FolderName}\n\nThis runs pnputil /add-driver /subdirs /install on the selected backup folder.",
+            "Confirm Driver Backup Restore", DarkDialogKind.Question, this))
+            return;
+
+        SetBusy(true, $"Restoring driver backup from {Path.GetFileName(folderDlg.FolderName)}...");
+        var (ok, reboot, msg) = await _storeService.InstallLocalPackageAsync(folderDlg.FolderName, AppendLog);
+        _historyService.Record(new DriverHistoryEntry
+        {
+            Action = "Rollback",
+            DeviceName = Path.GetFileName(folderDlg.FolderName),
+            Source = "Local Backup Restore",
+            Success = ok,
+            Message = msg,
+            BackupPath = folderDlg.FolderName
+        });
+        await RefreshHardwareAndStoreAsync();
+        SetBusy(false, ok ? "Driver backup restored." : "Driver backup restore finished with warnings.");
+        DarkDialog.Show(
+            (ok ? "Driver backup restored successfully." : "Restore reported an issue:") +
+            (reboot ? "\n\nReboot required." : "") +
+            $"\n\n{msg}",
+            "Restore / Rollback Backup", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private void ViewHistoryBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var entries = _historyService.LoadHistory();
+        if (entries.Count == 0)
+        {
+            DarkDialog.Show("No driver installs, scheduled updates, or rollbacks have been recorded yet.", "Driver Install History", DarkDialogKind.Info, this);
+            return;
+        }
+
+        var lines = entries.Take(15).Select(h =>
+            $"• [{h.TimeText}] {h.Action} — {h.DeviceName} ({h.FromVersion} → {h.ToVersion}, {h.Source}): {(h.Success ? "OK" : "FAILED")}");
+        var summary = string.Join("\n", lines);
+        if (entries.Count > 15)
+            summary += $"\n\n... and {entries.Count - 15} older record(s) in history.json";
+
+        DarkDialog.Show(summary, $"Driver Install History ({entries.Count} total)", DarkDialogKind.Info, this);
     }
 
     private async void InstallLocalDriverBtn_Click(object sender, RoutedEventArgs e)

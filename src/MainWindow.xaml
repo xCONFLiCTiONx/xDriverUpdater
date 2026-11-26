@@ -248,6 +248,7 @@
                 <TextBlock x:Name="SelectedUpdateDetail" Text="Tip: Click 'Check Updates (All Sources)' to query Windows Update (Device Manager channel), NVIDIA official servers, and all enabled repositories." Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
               </StackPanel>
               <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                <Button x:Name="PinUpdateDeviceBtn" Content="Pin Current Version" Click="PinUpdateDeviceBtn_Click" IsEnabled="False" Margin="0,0,8,0" ToolTip="Pin this device to its current driver version so manual and scheduled updates skip it."/>
                 <Button x:Name="OpenUpdateUrlBtn" Content="Open Download / Portal" Click="OpenUpdateUrlBtn_Click" IsEnabled="False"/>
               </StackPanel>
             </Grid>
@@ -338,6 +339,7 @@
                 <Button x:Name="DevOemBtn" Content="Open OEM Support Portal" Click="DevOemBtn_Click" IsEnabled="False" Margin="0,0,8,0"/>
                 <Button x:Name="DevDirectBtn" Content="Open Direct Manufacturer" Click="DevDirectBtn_Click" IsEnabled="False" Margin="0,0,8,0"/>
                 <Button x:Name="DevBackupBtn" Content="Backup This Driver (INF)" Click="DevBackupBtn_Click" IsEnabled="False" Margin="0,0,8,0"/>
+                <Button x:Name="DevPinBtn" Content="Pin Current Version" Click="DevPinBtn_Click" IsEnabled="False" Margin="0,0,8,0" ToolTip="Lock this device to its current driver version so scheduled updates skip it."/>
                 <Button x:Name="DevCopyHwidBtn" Content="Copy Hardware ID" Click="DevCopyHwidBtn_Click" IsEnabled="False"/>
               </WrapPanel>
             </Grid>
@@ -366,11 +368,21 @@
                   <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBox x:Name="NewRepoNameBox" Margin="0,0,8,0" ToolTip="Repository Name (e.g. My Acer Laptop Repo)"/>
-                <TextBox x:Name="NewRepoUrlBox" Grid.Column="1" Margin="0,0,8,0" ToolTip="https://.../manifest.json OR local folder path C:\Drivers"/>
+                <TextBox x:Name="NewRepoUrlBox" Grid.Column="1" Margin="0,0,8,0" ToolTip="https://.../manifest.json, Dell DriverPackCatalog.xml, OR local folder path C:\Drivers"/>
                 <Button x:Name="BrowseRepoBtn" Grid.Column="2" Content="Browse..." Click="BrowseRepoBtn_Click" Margin="0,0,8,0"/>
                 <Button x:Name="AddRepoBtn" Grid.Column="3" Content="Add Repository" Style="{StaticResource PrimaryButton}" Click="AddRepoBtn_Click"/>
               </Grid>
-              <TextBlock Text="Tip: Point to any HTTPS JSON manifest OR a local/network folder full of .inf drivers (xDriverUpdater auto-indexes Hardware IDs!)." Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,6,0,0"/>
+              <Grid Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Public &amp; OEM Presets:" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                <ComboBox x:Name="RepoPresetCombo" Grid.Column="1" Margin="0,0,8,0"/>
+                <Button x:Name="AddPresetRepoBtn" Grid.Column="2" Content="Add Preset Repo" Click="AddPresetRepoBtn_Click"/>
+              </Grid>
+              <TextBlock Text="Tip: Supports HTTPS JSON manifests, Dell Official DriverPackCatalog.xml, and local/SDIO driver folders (auto-indexed by Hardware ID)." Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,6,0,0"/>
             </StackPanel>
           </Border>
 
@@ -411,9 +423,12 @@
           <!-- Actions Bar -->
           <WrapPanel Grid.Row="0" Margin="0,0,0,4">
             <Button x:Name="BackupAllDriversBtn" Content="Backup All 3rd-Party Drivers" Style="{StaticResource PrimaryButton}" Click="BackupAllDriversBtn_Click" Margin="0,0,8,6"/>
+            <Button x:Name="ExportOfflinePackBtn" Content="Export Portable Offline Pack" Click="ExportOfflinePackBtn_Click" Margin="0,0,8,6" ToolTip="Exports all 3rd-party drivers + standalone install-all-drivers.ps1 for 100% offline OS reinstall recovery."/>
+            <Button x:Name="RestoreBackupBtn" Content="Restore / Rollback Backup..." Click="RestoreBackupBtn_Click" Margin="0,0,8,6" ToolTip="Restore a previously backed-up driver folder via pnputil."/>
             <Button x:Name="InstallLocalDriverBtn" Content="Install Local INF / CAB / ZIP..." Style="{StaticResource SuccessButton}" Click="InstallLocalDriverBtn_Click" Margin="0,0,8,6"/>
             <Button x:Name="DeleteStorePkgBtn" Content="Delete Selected Stale Package" Style="{StaticResource DangerButton}" Click="DeleteStorePkgBtn_Click" Margin="0,0,8,6"/>
             <Button x:Name="CleanAllStaleBtn" Content="Clean All Stale Packages" Style="{StaticResource DangerButton}" Click="CleanAllStaleBtn_Click" Margin="0,0,8,6" ToolTip="Remove all superseded, inactive (STALE) third-party OEM driver packages from the Windows Driver Store."/>
+            <Button x:Name="ViewHistoryBtn" Content="Install History" Click="ViewHistoryBtn_Click" Margin="0,0,8,6"/>
             <Button x:Name="OpenBackupsFolderBtn" Content="Open Backups Folder" Click="OpenBackupsFolderBtn_Click" Margin="0,0,8,6"/>
             <Button x:Name="RefreshStoreBtn" Content="Refresh Driver Store" Click="RefreshStoreBtn_Click" Margin="0,0,0,6"/>
           </WrapPanel>

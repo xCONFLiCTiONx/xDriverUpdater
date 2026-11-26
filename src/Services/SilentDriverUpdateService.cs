@@ -40,6 +40,7 @@ public sealed class SilentDriverUpdateService
     private readonly RepositoryManagerService _repoService = new();
     private readonly DriverStoreAndInstallService _storeService = new();
     private readonly XSecurityAlertService _alertService = new();
+    private readonly DriverHistoryService _historyService = new();
 
     public async Task<SilentUpdateRunResult> RunSilentUpdateAsync(
         AppSettings settings,
@@ -118,6 +119,14 @@ public sealed class SilentDriverUpdateService
             var installable = new List<DriverUpdateCandidate>();
             foreach (var cand in newerCandidates)
             {
+                if (!string.IsNullOrWhiteSpace(cand.DeviceId) &&
+                    settings.PinnedDevices != null &&
+                    settings.PinnedDevices.TryGetValue(cand.DeviceId, out var pinnedVer))
+                {
+                    Log($"[Pinned] Skipping {cand.DeviceName} (pinned at v{pinnedVer}); candidate v{cand.Version} ignored.");
+                    continue;
+                }
+
                 if (cand.InstallerType.Equals("page", StringComparison.OrdinalIgnoreCase))
                 {
                     result.UpdatesSkippedManual++;
@@ -186,6 +195,17 @@ public sealed class SilentDriverUpdateService
                         var (ok, reboot, msg) = await _storeService.InstallCandidateAsync(
                             cand, dev, settings, _wuaService, Log, progress: null, ct: ct, silentMode: true);
                         Log($"[Install] [{cand.DeviceName}] {(ok ? "SUCCESS" : "FAILED")}: {msg}");
+                        _historyService.Record(new DriverHistoryEntry
+                        {
+                            Action = "ScheduledInstall",
+                            DeviceName = cand.DeviceName,
+                            DeviceId = cand.DeviceId,
+                            FromVersion = cand.InstalledVersion,
+                            ToVersion = cand.Version,
+                            Source = cand.SourceLabel,
+                            Success = ok,
+                            Message = msg
+                        });
                         if (reboot) result.RebootRequired = true;
 
                         if (ok)

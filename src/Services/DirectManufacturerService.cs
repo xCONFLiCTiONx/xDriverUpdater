@@ -49,7 +49,114 @@ public sealed class DirectManufacturerService
             }
         }
 
+        // Direct Intel Download Center checks for Intel Wi-Fi, Bluetooth, and Arc/Iris Graphics
+        var intelTargets = devices
+            .Where(d => d.SiliconVendor.Equals("Intel", StringComparison.OrdinalIgnoreCase) &&
+                        d.Category is "Network" or "Bluetooth" or "Display")
+            .GroupBy(d => d.Category, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+        foreach (var intelDev in intelTargets)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var intelVersions = await QueryIntelDownloadCenterAsync(profile, intelDev, preferOemOnLaptops, log, ct);
+                results.AddRange(intelVersions);
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke($"[Direct:Intel] Lookup skipped for {intelDev.DisplayName}: {ex.Message}");
+            }
+        }
+
         return results;
+    }
+
+    private static async Task<List<DriverUpdateCandidate>> QueryIntelDownloadCenterAsync(
+        SystemProfile profile,
+        DriverDevice dev,
+        bool preferOemOnLaptops,
+        Action<string>? log,
+        CancellationToken ct)
+    {
+        var list = new List<DriverUpdateCandidate>();
+        // Official Intel Download Center public product IDs for universal Windows 10/11 64-bit packs
+        string? searchQuery = dev.Category switch
+        {
+            "Network" when dev.DisplayName.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) || dev.DisplayName.Contains("Wireless", StringComparison.OrdinalIgnoreCase)
+                => "Windows 10 and Windows 11 Wi-Fi Drivers for Intel Wireless Adapters",
+            "Bluetooth"
+                => "Intel Wireless Bluetooth Drivers for Windows 10 and Windows 11",
+            "Display" when dev.DisplayName.Contains("Arc", StringComparison.OrdinalIgnoreCase) || dev.DisplayName.Contains("Iris", StringComparison.OrdinalIgnoreCase) || dev.DisplayName.Contains("UHD", StringComparison.OrdinalIgnoreCase)
+                => "Intel Arc & Iris Xe Graphics - Windows",
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(searchQuery))
+            return list;
+
+        var url = $"https://www.intel.com/content/www/us/en/download-center/home.html";
+        var apiUrl = $"https://www.intel.com/libs/apps/intel/support/downloads/search.json?q={Uri.EscapeDataString(searchQuery)}&rows=5&os=Windows%2011";
+        using var req = new HttpRequestMessage(HttpMethod.Get, apiUrl);
+        req.Headers.TryAddWithoutValidation("Accept", "application/json");
+        using var resp = await Http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+            return list;
+
+        var json = await resp.Content.ReadAsStringAsync(ct);
+        if (string.IsNullOrWhiteSpace(json) || !json.TrimStart().StartsWith('{'))
+            return list;
+
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("results", out var items) || items.ValueKind != JsonValueKind.Array)
+            return list;
+
+        foreach (var item in items.EnumerateArray().Take(4))
+        {
+            var title = item.TryGetProperty("title", out var tProp) ? tProp.GetString() ?? "" : "";
+            var ver = item.TryGetProperty("version", out var vProp) ? vProp.GetString() ?? "" : "";
+            var dlUrl = item.TryGetProperty("url", out var uProp) ? uProp.GetString() ?? "" : "";
+            var dateStr = item.TryGetProperty("date", out var dProp) ? dProp.GetString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(ver) || string.IsNullOrWhiteSpace(dlUrl)) continue;
+            if (!dlUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                dlUrl = "https://www.intel.com" + dlUrl;
+
+            DateTime? relDate = DateTime.TryParse(dateStr, out var parsed) ? parsed : null;
+            bool isNewer = IsVersionNewer(ver, dev.DriverVersion);
+            bool hasRealInstalledDate = dev.DriverDate.HasValue &&
+                !(dev.DriverDate.Value.Year == 2006 && dev.DriverDate.Value.Month == 6 && dev.DriverDate.Value.Day == 21);
+            if (isNewer && hasRealInstalledDate && relDate.HasValue && relDate.Value.Date < dev.DriverDate!.Value.Date)
+                isNewer = false;
+
+            list.Add(new DriverUpdateCandidate
+            {
+                Id = $"intel:{dev.Category}:{ver}",
+                SourceKind = UpdateSourceKind.DirectManufacturer,
+                SourceName = "Intel Download Center (Direct)",
+                Title = string.IsNullOrWhiteSpace(title) ? $"Intel {dev.Category} Driver {ver}" : title,
+                Vendor = "Intel",
+                Version = ver,
+                ReleaseDate = relDate,
+                DownloadUrl = dlUrl.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? dlUrl : url,
+                InstallerType = dlUrl.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? "exe" : "page",
+                SilentArgs = dlUrl.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? "-s" : "",
+                Channel = "whql",
+                ReleaseNotes = $"Official Intel Download Center package for {dev.DisplayName}.\nInstalled: {dev.DriverVersion} | Candidate: {ver}",
+                MatchedHardwareId = dev.HardwareId,
+                DeviceName = dev.DisplayName,
+                DeviceId = dev.DeviceId,
+                InstalledVersion = dev.DriverVersion,
+                IsNewerThanInstalled = isNewer,
+                MatchScore = isNewer ? (profile.IsLaptop && preferOemOnLaptops ? 76 : 90) : 50
+            });
+        }
+
+        if (list.Count > 0)
+            log?.Invoke($"[Direct:Intel] Loaded {list.Count} official version(s) for {dev.DisplayName} (latest {list[0].Version}).");
+
+        return list;
     }
 
     private static async Task<List<DriverUpdateCandidate>> QueryNvidiaMultiVersionAsync(

@@ -69,5 +69,6 @@ public sealed class AppSettings
     public double? WindowLeft { get; set; }
     public double? WindowTop { get; set; }
     public bool WindowMaximized { get; set; }
+    public Dictionary<string, string> PinnedDevices { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<RepositorySourceConfig> Repositories { get; set; } = new();
 }

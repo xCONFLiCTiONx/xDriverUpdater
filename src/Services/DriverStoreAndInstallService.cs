@@ -195,6 +195,79 @@ public sealed class DriverStoreAndInstallService
         }, ct);
     }
 
+    public Task<(bool Success, string OutputFolder, string Message)> ExportPortableOfflineDriverPackAsync(
+        string destinationRoot,
+        SystemProfile profile,
+        List<DriverDevice> devices,
+        Action<string>? log = null,
+        CancellationToken ct = default)
+    {
+        return Task.Run(() =>
+        {
+            var packDir = Path.Combine(destinationRoot, $"xDriverPack-{SanitizeFileName(Environment.MachineName)}-{DateTime.Now:yyyyMMdd-HHmmss}");
+            var driversDir = Path.Combine(packDir, "Drivers");
+            Directory.CreateDirectory(driversDir);
+
+            log?.Invoke($"[OfflinePack] Exporting all active third-party drivers to {driversDir}...");
+            var (exit, output) = RunProcess("pnputil.exe", $"/export-driver * \"{driversDir}\"");
+            if (exit != 0)
+                return (false, packDir, $"Driver export failed (exit {exit}): {output.Trim()}");
+
+            // Generate standalone offline restore script
+            var scriptPath = Path.Combine(packDir, "install-all-drivers.ps1");
+            var script = $@"Clear-Host
+# xDriverUpdater Portable Offline Driver Pack
+# Machine: {Environment.MachineName} | Platform: {profile.PlatformSummary}
+# Created: {DateTime.Now:yyyy-MM-dd HH:mm:ss}
+$ErrorActionPreference = 'Stop'
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {{
+    Write-Error 'Please run install-all-drivers.ps1 from an elevated (Administrator) PowerShell prompt.'
+    exit 1
+}}
+
+$driversPath = Join-Path $PSScriptRoot 'Drivers'
+if (-not (Test-Path $driversPath)) {{
+    Write-Error ""Drivers folder not found: $driversPath""
+    exit 1
+}}
+
+Write-Host 'Installing all offline drivers from portable pack...' -ForegroundColor Cyan
+& pnputil.exe /add-driver ""$driversPath\*.inf"" /subdirs /install
+$code = $LASTEXITCODE
+if ($code -eq 0 -or $code -eq 3010 -or $code -eq 259) {{
+    Write-Host ""Offline driver restore completed (exit code $code). Reboot if prompted."" -ForegroundColor Green
+    exit 0
+}}
+Write-Error ""pnputil exited with code $code""
+exit $code
+";
+            File.WriteAllText(scriptPath, script, Encoding.UTF8);
+
+            // Generate README summary with hardware inventory
+            var readmePath = Path.Combine(packDir, "PACK-INFO.txt");
+            var infoSb = new StringBuilder();
+            infoSb.AppendLine($"xDriverUpdater Portable Offline Driver Pack");
+            infoSb.AppendLine($"Machine:  {Environment.MachineName}");
+            infoSb.AppendLine($"Platform: {profile.PlatformSummary}");
+            infoSb.AppendLine($"OS:       {profile.OsCaption} (Build {profile.OsBuild}, {profile.OsArch})");
+            infoSb.AppendLine($"Created:  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            infoSb.AppendLine();
+            infoSb.AppendLine("HOW TO USE ON A FRESH WINDOWS INSTALL (100% OFFLINE):");
+            infoSb.AppendLine("  1. Right-click install-all-drivers.ps1 -> Run with PowerShell (as Administrator), OR");
+            infoSb.AppendLine("  2. Add this folder as a Custom Repository in xDriverUpdater.");
+            infoSb.AppendLine();
+            infoSb.AppendLine($"Exported OEM Devices ({devices.Count(d => d.InfName.StartsWith("oem", StringComparison.OrdinalIgnoreCase))}):");
+            foreach (var d in devices.Where(d => d.InfName.StartsWith("oem", StringComparison.OrdinalIgnoreCase)))
+                infoSb.AppendLine($"  - {d.DisplayName} | {d.DriverProvider} | v{d.DriverVersion} ({d.DriverDateText}) | {d.InfName}");
+            File.WriteAllText(readmePath, infoSb.ToString(), Encoding.UTF8);
+
+            log?.Invoke($"[OfflinePack] Portable Offline Driver Pack created at {packDir}");
+            return (true, packDir, $"Portable Offline Driver Pack created at:\n{packDir}\n\nIncludes Drivers\\*, install-all-drivers.ps1, and PACK-INFO.txt.");
+        }, ct);
+    }
+
     public Task<(bool Success, string Message)> ExportSingleDriverBackupAsync(string publishedInfName, string baseBackupDir, Action<string>? log = null)
     {
         return Task.Run(() =>
@@ -307,7 +380,7 @@ public sealed class DriverStoreAndInstallService
         // Install by type
         if (effectiveType is "inf-zip" or "cab")
         {
-            return await InstallLocalPackageAsync(localPath, log, ct);
+            return await InstallLocalPackageAsync(localPath, log, ct, targetDevice: device, allowDowngrade: !candidate.IsNewerThanInstalled);
         }
 
         if (effectiveType is "exe" or "msi")
@@ -348,12 +421,18 @@ public sealed class DriverStoreAndInstallService
     public Task<(bool Success, bool RebootRequired, string Message)> InstallLocalPackageAsync(
         string fileOrFolderPath,
         Action<string>? log = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        DriverDevice? targetDevice = null,
+        bool allowDowngrade = true)
     {
         return Task.Run(() =>
         {
             if (Directory.Exists(fileOrFolderPath))
             {
+                var preCheck = VerifyExtractedInfs(fileOrFolderPath, targetDevice, allowDowngrade, log);
+                if (!preCheck.Ok)
+                    return (false, false, preCheck.Message);
+
                 log?.Invoke($"[PnPUtil] Staging & installing INF drivers in folder: {fileOrFolderPath}");
                 var (exit, output) = RunProcess("pnputil.exe", $"/add-driver \"{Path.Combine(fileOrFolderPath, "*.inf")}\" /subdirs /install");
                 log?.Invoke(output.Trim());
@@ -366,6 +445,10 @@ public sealed class DriverStoreAndInstallService
             var ext = Path.GetExtension(fileOrFolderPath).ToLowerInvariant();
             if (ext == ".inf")
             {
+                var preCheck = VerifySingleInf(fileOrFolderPath, targetDevice, allowDowngrade, log);
+                if (!preCheck.Ok)
+                    return (false, false, preCheck.Message);
+
                 log?.Invoke($"[PnPUtil] Installing INF: {fileOrFolderPath}");
                 var (exit, output) = RunProcess("pnputil.exe", $"/add-driver \"{fileOrFolderPath}\" /install");
                 log?.Invoke(output.Trim());
@@ -391,6 +474,10 @@ public sealed class DriverStoreAndInstallService
                             return (false, false, $"CAB expansion failed: {expOut.Trim()}");
                     }
 
+                    var preCheck = VerifyExtractedInfs(extractDir, targetDevice, allowDowngrade, log);
+                    if (!preCheck.Ok)
+                        return (false, false, preCheck.Message);
+
                     log?.Invoke($"[PnPUtil] Installing extracted INF driver(s)...");
                     var (exit, output) = RunProcess("pnputil.exe", $"/add-driver \"{Path.Combine(extractDir, "*.inf")}\" /subdirs /install");
                     log?.Invoke(output.Trim());
@@ -404,6 +491,103 @@ public sealed class DriverStoreAndInstallService
 
             return (false, false, $"Unsupported file extension: {ext}. Expected .inf, .cab, .zip, or a driver folder.");
         }, ct);
+    }
+
+    private static (bool Ok, string Message) VerifyExtractedInfs(
+        string folderPath,
+        DriverDevice? targetDevice,
+        bool allowDowngrade,
+        Action<string>? log)
+    {
+        var infFiles = Directory.EnumerateFiles(folderPath, "*.inf", SearchOption.AllDirectories).Take(40).ToList();
+        if (infFiles.Count == 0)
+            return (false, "No .inf driver files were found inside the package.");
+
+        if (targetDevice == null)
+            return (true, $"Found {infFiles.Count} INF file(s).");
+
+        var deviceHwids = targetDevice.HardwareIds
+            .Concat(new[] { targetDevice.HardwareId })
+            .Where(h => !string.IsNullOrWhiteSpace(h))
+            .Select(h => h.Trim().ToUpperInvariant())
+            .Distinct()
+            .ToList();
+
+        bool anyHwidMatch = false;
+        bool anyDateOk = false;
+        DateTime? newestInfDate = null;
+        string matchedInfSummary = "";
+
+        bool hasRealInstalledDate = targetDevice.DriverDate.HasValue &&
+            !(targetDevice.DriverDate.Value.Year == 2006 && targetDevice.DriverDate.Value.Month == 6 && targetDevice.DriverDate.Value.Day == 21);
+
+        foreach (var inf in infFiles)
+        {
+            try
+            {
+                var content = File.ReadAllText(inf);
+                var upper = content.ToUpperInvariant();
+                var verMatch = Regex.Match(content, @"DriverVer\s*=\s*([0-9/\-]+)\s*,\s*([0-9\.]+)", RegexOptions.IgnoreCase);
+                DateTime? infDate = verMatch.Success && DateTime.TryParse(verMatch.Groups[1].Value, out var parsed) ? parsed : null;
+                var infVer = verMatch.Success ? verMatch.Groups[2].Value : "unknown";
+
+                if (infDate.HasValue && (!newestInfDate.HasValue || infDate.Value > newestInfDate.Value))
+                    newestInfDate = infDate;
+
+                bool hwidHit = deviceHwids.Count == 0 || deviceHwids.Any(h =>
+                {
+                    // Match full HWID or base VEN+DEV / VID+PID token
+                    if (upper.Contains(h)) return true;
+                    var baseToken = Regex.Match(h, @"(?:PCI|USB|HDAUDIO)\\(?:VEN|VID)_[0-9A-F]{4}&(?:DEV|PID)_[0-9A-F]{4}");
+                    return baseToken.Success && upper.Contains(baseToken.Value);
+                });
+
+                if (hwidHit)
+                {
+                    anyHwidMatch = true;
+                    bool dateOk = allowDowngrade || !hasRealInstalledDate || !infDate.HasValue || infDate.Value.Date >= targetDevice.DriverDate!.Value.Date;
+                    if (dateOk)
+                    {
+                        anyDateOk = true;
+                        matchedInfSummary = $"{Path.GetFileName(inf)} (DriverVer={infDate?.ToString("yyyy-MM-dd") ?? "?"} v{infVer})";
+                    }
+                }
+            }
+            catch { }
+        }
+
+        if (!anyHwidMatch)
+        {
+            var err = $"Pre-install INF verification failed: none of the {infFiles.Count} INF file(s) match {targetDevice.DisplayName} ({targetDevice.HardwareId}).";
+            log?.Invoke($"[Verify:INF] {err}");
+            return (false, err);
+        }
+
+        if (!anyDateOk && !allowDowngrade && hasRealInstalledDate && newestInfDate.HasValue)
+        {
+            var err = $"Pre-install INF verification skipped install: package DriverDate ({newestInfDate.Value:yyyy-MM-dd}) is older than installed driver ({targetDevice.DriverDate!.Value:yyyy-MM-dd}).";
+            log?.Invoke($"[Verify:INF] {err}");
+            return (false, err);
+        }
+
+        log?.Invoke($"[Verify:INF] Verified compatible INF: {matchedInfSummary}");
+        return (true, matchedInfSummary);
+    }
+
+    private static (bool Ok, string Message) VerifySingleInf(
+        string infPath,
+        DriverDevice? targetDevice,
+        bool allowDowngrade,
+        Action<string>? log)
+    {
+        if (targetDevice == null)
+            return (true, Path.GetFileName(infPath));
+
+        var dir = Path.GetDirectoryName(infPath);
+        if (string.IsNullOrWhiteSpace(dir))
+            return (true, Path.GetFileName(infPath));
+
+        return VerifyExtractedInfs(dir, targetDevice, allowDowngrade, log);
     }
 
     private static (bool Success, bool RebootRequired, string Message) EvaluatePnpUtilInstallResult(int exitCode, string output)

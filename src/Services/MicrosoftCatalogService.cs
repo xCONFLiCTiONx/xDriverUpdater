@@ -45,33 +45,38 @@ public sealed class MicrosoftCatalogService
     {
         var results = new List<DriverUpdateCandidate>();
 
-        // Query key hardware categories with concrete PCI/USB/HDAUDIO/MONITOR Hardware IDs (deduplicated)
+        // Query key hardware categories (plus any problem or generic inbox devices) with concrete Hardware IDs
         var targetCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "Display", "Display & Imaging", "Network", "Audio", "Bluetooth", "Storage & NVMe"
+            "Display", "Display & Imaging", "Network", "Audio", "Bluetooth", "Storage & NVMe",
+            "Chipset & System", "USB", "Security & Firmware"
         };
 
         var queriedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var queryTargets = new List<(DriverDevice Device, string QueryHwid)>();
+        var queryTargets = new List<(DriverDevice Device, string PrimaryHwid, string? SubsysHwid)>();
 
         foreach (var d in devices)
         {
-            if (!targetCategories.Contains(d.Category) && !d.HasProblem)
+            if (!targetCategories.Contains(d.Category) && !d.HasProblem && d.HealthStatus != DriverHealthStatus.InboxGeneric)
                 continue;
             if (string.IsNullOrWhiteSpace(d.VendorId) || string.IsNullOrWhiteSpace(d.ProductId))
                 continue;
             if (d.BusType is not ("PCI" or "USB" or "HDAUDIO" or "MONITOR"))
                 continue;
 
-            var prefix = d.BusType switch
+            var baseHwid = d.BusType switch
             {
                 "USB" => $"USB\\VID_{d.VendorId}&PID_{d.ProductId}",
                 "MONITOR" => $"MONITOR\\{d.VendorId}{d.ProductId}",
                 _ => $"{d.BusType}\\VEN_{d.VendorId}&DEV_{d.ProductId}"
             };
 
-            if (queriedKeys.Add(prefix))
-                queryTargets.Add((d, prefix));
+            string? subsysHwid = d.BusType is "PCI" or "HDAUDIO" && !string.IsNullOrWhiteSpace(d.SubsystemFull)
+                ? $"{baseHwid}&SUBSYS_{d.SubsystemFull}"
+                : null;
+
+            if (queriedKeys.Add(subsysHwid ?? baseHwid))
+                queryTargets.Add((d, baseHwid, subsysHwid));
         }
 
         // Run up to 4 concurrent catalog lookups so scanning stays fast
@@ -83,7 +88,26 @@ public sealed class MicrosoftCatalogService
             await sem.WaitAsync(ct);
             try
             {
-                var found = await QueryHardwareIdAsync(target.Device, target.QueryHwid, log, ct);
+                var found = new List<DriverUpdateCandidate>();
+                // Prefer exact SUBSYS OEM Hardware ID first when available
+                if (!string.IsNullOrWhiteSpace(target.SubsysHwid))
+                {
+                    var subsysMatches = await QueryHardwareIdAsync(target.Device, target.SubsysHwid, isExactSubsys: true, log, ct);
+                    found.AddRange(subsysMatches);
+                }
+
+                // Also query base VEN+DEV if SUBSYS returned fewer than 2 versions
+                if (found.Count < 2)
+                {
+                    var baseMatches = await QueryHardwareIdAsync(target.Device, target.PrimaryHwid, isExactSubsys: false, log, ct);
+                    var existingVers = new HashSet<string>(found.Select(f => f.Version), StringComparer.OrdinalIgnoreCase);
+                    foreach (var m in baseMatches)
+                    {
+                        if (existingVers.Add(m.Version))
+                            found.Add(m);
+                    }
+                }
+
                 if (found.Count > 0)
                 {
                     lock (lockObj)
@@ -109,6 +133,7 @@ public sealed class MicrosoftCatalogService
     private static async Task<List<DriverUpdateCandidate>> QueryHardwareIdAsync(
         DriverDevice device,
         string hwidQuery,
+        bool isExactSubsys,
         Action<string>? log,
         CancellationToken ct)
     {
@@ -172,7 +197,10 @@ public sealed class MicrosoftCatalogService
                 DeviceId = device.DeviceId,
                 InstalledVersion = device.DriverVersion,
                 IsNewerThanInstalled = isNewer,
-                MatchScore = isNewer ? (device.IsLaptopOemCustomized ? 92 : 84) : 45
+                IsOemSpecific = isExactSubsys,
+                MatchScore = isNewer
+                    ? (isExactSubsys ? 96 : (device.IsLaptopOemCustomized ? 92 : 84))
+                    : 45
             });
 
             // Keep up to 8 distinct versions per device for clean version selection

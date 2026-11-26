@@ -2,6 +2,7 @@ using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using xDriverUpdater.Models;
 
 namespace xDriverUpdater.Services;
@@ -81,14 +82,17 @@ public sealed class RepositoryManagerService
                             continue;
 
                         bool isNewer = DirectManufacturerService.IsVersionNewer(pkg.Version, dev.DriverVersion);
+                        DateTime? relDate = DateTime.TryParse(pkg.ReleaseDate, out var dt) ? dt : null;
+                        bool hasRealInstalledDate = dev.DriverDate.HasValue &&
+                            !(dev.DriverDate.Value.Year == 2006 && dev.DriverDate.Value.Month == 6 && dev.DriverDate.Value.Day == 21);
+                        if (isNewer && hasRealInstalledDate && relDate.HasValue && relDate.Value.Date < dev.DriverDate!.Value.Date)
+                            isNewer = false;
 
                         // Compute match score: OEM-exact on laptop scores 100, exact HWID scores 90, wildcard scores 82
                         int score = isNewer ? 82 : 50;
                         if (!matchedHwid.Contains('*')) score += 8;
                         if (pkgIsOem && profile.IsLaptop) score += 10;
                         if (!pkgIsOem && dev.IsLaptopOemCustomized && preferOemOnLaptops) score -= 12;
-
-                        DateTime? relDate = DateTime.TryParse(pkg.ReleaseDate, out var dt) ? dt : null;
 
                         var cand = new DriverUpdateCandidate
                         {
@@ -145,14 +149,18 @@ public sealed class RepositoryManagerService
         if (src.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             src.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            var json = await Http.GetStringAsync(src, ct);
-            return JsonSerializer.Deserialize<RepositoryManifest>(json, JsonOpts);
+            var raw = await Http.GetStringAsync(src, ct);
+            if (src.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) || raw.TrimStart().StartsWith('<'))
+                return ParseDellXmlCatalog(repo.Name, src, raw);
+            return JsonSerializer.Deserialize<RepositoryManifest>(raw, JsonOpts);
         }
 
         if (File.Exists(src))
         {
-            var json = await File.ReadAllTextAsync(src, ct);
-            return JsonSerializer.Deserialize<RepositoryManifest>(json, JsonOpts);
+            var raw = await File.ReadAllTextAsync(src, ct);
+            if (src.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) || raw.TrimStart().StartsWith('<'))
+                return ParseDellXmlCatalog(repo.Name, src, raw);
+            return JsonSerializer.Deserialize<RepositoryManifest>(raw, JsonOpts);
         }
 
         if (Directory.Exists(src))
@@ -164,11 +172,96 @@ public sealed class RepositoryManagerService
                 return JsonSerializer.Deserialize<RepositoryManifest>(json, JsonOpts);
             }
 
-            // Auto-index a local driver folder containing .inf / .cab / .zip files!
+            // Auto-index a local driver folder containing .inf / .cab / .zip / SDIO DriverPacks
             return BuildLocalFolderManifest(repo.Name, src);
         }
 
         throw new FileNotFoundException($"Repository path or URL not found: {src}");
+    }
+
+    public static List<(string Name, string UrlOrPath, string Description)> GetPublicRepositoryPresets() => new()
+    {
+        (
+            "Dell Official Enterprise DriverPack Catalog (XML)",
+            "https://downloads.dell.com/catalog/DriverPackCatalog.xml",
+            "Official Dell enterprise XML catalog of WHQL driver packs for Dell Latitude, OptiPlex, Precision, XPS & Inspiron."
+        ),
+        (
+            "xServer LAN Driver Repository (Self-Hosted)",
+            "https://xserver.home.xconflictionx.cc/drivers/manifest.json",
+            "Your local xServer LAN driver manifest for gigabit-speed offline/local distribution across all home PCs."
+        ),
+        (
+            "Local / SDIO DriverPacks Folder (C:\\Drivers)",
+            @"C:\Drivers",
+            "Auto-indexes extracted .inf drivers or Snappy Driver Installer Origin (SDIO) DriverPacks folders locally."
+        )
+    };
+
+    private static RepositoryManifest ParseDellXmlCatalog(string name, string sourceUrl, string xmlContent)
+    {
+        var manifest = new RepositoryManifest
+        {
+            Name = name,
+            Maintainer = "Dell Technologies (Official XML Catalog)",
+            Description = $"Parsed from {sourceUrl}",
+            UpdatedUtc = DateTime.UtcNow.ToString("O")
+        };
+
+        try
+        {
+            var xdoc = XDocument.Parse(xmlContent);
+            var ns = xdoc.Root?.GetDefaultNamespace() ?? XNamespace.None;
+            var baseLocation = xdoc.Root?.Attribute("baseLocation")?.Value?.Trim() ?? "downloads.dell.com";
+            if (!baseLocation.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                baseLocation = "https://" + baseLocation;
+
+            foreach (var pkg in xdoc.Descendants(ns + "DriverPackage").Take(400))
+            {
+                var path = pkg.Attribute("path")?.Value?.Trim() ?? "";
+                var ver = pkg.Attribute("vendorVersion")?.Value?.Trim() ?? pkg.Attribute("dellVersion")?.Value?.Trim() ?? "";
+                var relDate = pkg.Attribute("dateTime")?.Value?.Trim() ?? "";
+                var sizeStr = pkg.Attribute("size")?.Value?.Trim() ?? "0";
+                var hashMd5 = pkg.Attribute("hashMD5")?.Value?.Trim() ?? "";
+                var pkgName = pkg.Element(ns + "Name")?.Element(ns + "Display")?.Value?.Trim() ?? Path.GetFileName(path);
+                if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(ver)) continue;
+
+                var dlUrl = path.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                    ? path
+                    : $"{baseLocation.TrimEnd('/')}/{path.TrimStart('/')}";
+                var ext = Path.GetExtension(path).ToLowerInvariant();
+                var installerType = ext switch
+                {
+                    ".cab" => "cab",
+                    ".zip" => "inf-zip",
+                    ".exe" => "exe",
+                    _ => "page"
+                };
+
+                long.TryParse(sizeStr, out var sizeBytes);
+                manifest.Packages.Add(new RepoDriverPackage
+                {
+                    Id = $"dell:{Path.GetFileNameWithoutExtension(path)}",
+                    Name = pkgName,
+                    Vendor = "Dell",
+                    OemVendor = "Dell",
+                    FormFactor = "any",
+                    Category = "OEM Driver Pack",
+                    HardwareIds = new() { "PCI\\VEN_*&SUBSYS_*1028*" },
+                    Version = ver,
+                    ReleaseDate = relDate,
+                    SizeBytes = sizeBytes,
+                    DownloadUrl = dlUrl,
+                    InstallerType = installerType,
+                    SilentArgs = installerType == "exe" ? "/s" : "",
+                    Channel = "oem",
+                    ReleaseNotes = $"Official Dell DriverPack Catalog package ({Path.GetFileName(path)}). MD5: {hashMd5}"
+                });
+            }
+        }
+        catch { }
+
+        return manifest;
     }
 
     private static RepositoryManifest BuildLocalFolderManifest(string name, string folderPath)
