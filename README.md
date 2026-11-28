@@ -14,7 +14,9 @@ Styled with the **Antigravity Dark Gray + Cloudflare Orange** navigation-drawer 
    - One-click **Apply Static IP to Both Adapters** (Ethernet & Wi-Fi) with automatic pre-change snapshot and one-click **Revert Both Adapters (Restore Previous / DHCP)**, plus Flush DNS, Renew DHCP, Restart Adapters, and Reset Winsock/TCP-IP.
 3. **Drive Sentinel (NVMe & SATA SMART Failure Prediction)**
    - Direct IOCTL NVMe health log & SAT-12/SAT-16/ATA SMART telemetry, 30-day failure prediction, temperature monitoring, wear-rate history, and correlated Windows storage event logs with background tray alerts.
-4. **Driver Manager, Telemetry & Debloat, Live Outbound Monitor, Smart Power Plan & Context/Startup Manager**
+4. **Malware Scanner, 12-Point Security Hardening & Quarantine (Merged from xScanner)**
+   - ClamAV + PE/Heuristic/NTFS Forensics Basic & Full system scans with live terminal output, SQLite scan cache & history, quarantine restore/delete, folder exclusions, scheduled weekly scans (`/scheduled`), and a 12-point Windows security hardening audit & remediation engine.
+5. **Driver Manager, Telemetry & Debloat, Live Outbound Monitor, Smart Power Plan & Context/Startup Manager**
    - Dual-source driver updater (Windows Update WHQL, MS Catalog, NVIDIA Live API, custom repos), Driver Store cleanup, Telemetry & Appx debloat, real-time outbound TCP firewall monitor, hardware-aware Power Plan enforcer (`powercfg`), and Explorer Context Menu / Startup / Installed Apps / Win+X manager.
 
 ## Build & Package

@@ -71,6 +71,15 @@
               </StackPanel>
             </RadioButton>
 
+            <RadioButton x:Name="NavScanner" Style="{StaticResource NavButtonStyle}" Checked="Nav_Checked" Tag="Scanner">
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Path Data="M15.5,14 H14.71 L14.43,13.73 C15.41,12.59 16,11.11 16,9.5 C16,5.91 13.09,3 9.5,3 C5.91,3 3,5.91 3,9.5 C3,13.09 5.91,16 9.5,16 C11.11,16 12.59,15.41 13.73,14.43 L14,14.71 V15.5 L19,20.49 L20.49,19 L15.5,14 Z M9.5,14 C7.01,14 5,11.99 5,9.5 C5,7.01 7.01,5 9.5,5 C11.99,5 14,7.01 14,9.5 C14,11.99 11.99,14 9.5,14 Z"
+                      Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"
+                      Width="15" Height="15" Stretch="Uniform" Margin="0,0,11,0" VerticalAlignment="Center"/>
+                <TextBlock Text="Malware Scanner" VerticalAlignment="Center"/>
+              </StackPanel>
+            </RadioButton>
+
             <RadioButton x:Name="NavNetwork" Style="{StaticResource NavButtonStyle}" Checked="Nav_Checked" Tag="Network">
               <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Path Data="M12,2 A10,10 0 1,0 12,22 A10,10 0 1,0 12,2 Z M4,12 H20 M12,2 C14.5,5 15.5,8.5 15.5,12 C15.5,15.5 14.5,19 12,22 C9.5,19 8.5,15.5 8.5,12 C8.5,8.5 9.5,5 12,2 Z"
@@ -1426,6 +1435,237 @@
           </StackPanel>
         </Grid>
       </Grid>
+
+      <!-- ==================== VIEW 9: MALWARE SCANNER & HARDENING (Merged from xScanner) ==================== -->
+      <TabControl x:Name="ScannerView" Grid.Row="1" Visibility="Collapsed">
+        <!-- SUB-TAB 1: SCANNER & LIVE TERMINAL -->
+        <TabItem Header="Malware Scanner">
+          <Grid Margin="0,10,0,4">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 4 Bento Metrics -->
+            <UniformGrid Grid.Row="0" Columns="4" Margin="0,0,0,12">
+              <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="10" Padding="12,9" Margin="0,0,8,0">
+                <StackPanel>
+                  <TextBlock Text="SCAN STATUS" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                  <TextBlock x:Name="ScanStatusText" Text="READY" FontSize="17" FontWeight="Bold" Foreground="{StaticResource Success}" Margin="0,3,0,0"/>
+                </StackPanel>
+              </Border>
+              <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="10" Padding="12,9" Margin="0,0,8,0">
+                <StackPanel>
+                  <TextBlock Text="CLAMAV ENGINE" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                  <TextBlock x:Name="ScanClamStatusText" Text="Checking..." FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource AccentBright}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+              </Border>
+              <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="10" Padding="12,9" Margin="0,0,8,0">
+                <StackPanel>
+                  <TextBlock Text="FILES SCANNED" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                  <TextBlock x:Name="ScanFilesCountText" Text="0" FontSize="17" FontWeight="Bold" Margin="0,3,0,0"/>
+                </StackPanel>
+              </Border>
+              <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="10" Padding="12,9">
+                <StackPanel>
+                  <TextBlock Text="THREATS DETECTED" FontSize="9.5" FontWeight="Bold" Foreground="{StaticResource MutedText}"/>
+                  <TextBlock x:Name="ScanThreatsCountText" Text="0" FontSize="17" FontWeight="Bold" Foreground="{StaticResource Danger}" Margin="0,3,0,0"/>
+                </StackPanel>
+              </Border>
+            </UniformGrid>
+
+            <!-- Scan Action Buttons -->
+            <WrapPanel Grid.Row="1" Margin="0,0,0,10">
+              <Button x:Name="BtnBasicScan" Content="Run Basic Scan" Style="{StaticResource SolidAccentButtonStyle}" Click="BtnBasicScan_Click" Margin="0,0,8,6"/>
+              <Button x:Name="BtnFullScan" Content="Run Full System Scan" Style="{StaticResource AccentButtonStyle}" Click="BtnFullScan_Click" Margin="0,0,8,6"/>
+              <Button x:Name="BtnStopScan" Content="Stop Scan" Style="{StaticResource DangerButton}" Click="BtnStopScan_Click" IsEnabled="False" Margin="0,0,8,6"/>
+              <Button x:Name="BtnInstallClam" Content="Install / Update ClamAV" Click="BtnInstallClam_Click" Margin="0,0,8,6"/>
+              <Button Content="Clear Terminal" Click="BtnClearScanTerminal_Click" Margin="0,0,0,6"/>
+            </WrapPanel>
+
+            <!-- Current File + Progress -->
+            <Border Grid.Row="2" Style="{StaticResource CardBorder}" Padding="12,9" Margin="0,0,0,10">
+              <StackPanel>
+                <TextBlock x:Name="ScanCurrentFileText" Text="Ready to scan processes, persistence, NTFS forensics, and files." Foreground="{StaticResource MutedText}" FontSize="11.5" TextTrimming="CharacterEllipsis" Margin="0,0,0,6"/>
+                <ProgressBar x:Name="ScanProgressBar" Minimum="0" Maximum="100" Value="0" Height="7"/>
+              </StackPanel>
+            </Border>
+
+            <!-- Live Scanner Terminal -->
+            <Border Grid.Row="3" Style="{StaticResource CardBorder}" Padding="10">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="LIVE SCANNER &amp; FORENSICS TERMINAL" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}" Margin="0,0,0,6"/>
+                <TextBox x:Name="ScannerTerminalBox" Grid.Row="1" IsReadOnly="True" FontFamily="Consolas" FontSize="11.5"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         TextWrapping="NoWrap" Background="#121214" BorderBrush="{StaticResource PanelBorder}" Padding="8"/>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- SUB-TAB 2: 12-POINT SECURITY HARDENING -->
+        <TabItem Header="12-Point Hardening">
+          <Grid Margin="0,10,0,4">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="175"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="0,0,0,10">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock x:Name="HardeningScoreText" Text="Run a 12-Point Security Audit to check Firewall, SMB/RPC Port Shielding, DoH, LLMNR, PowerShell Logging &amp; Defender." FontWeight="SemiBold" FontSize="13"/>
+                <TextBlock x:Name="HardeningDohText" Text="" Foreground="{StaticResource MutedText}" FontSize="11.5" Margin="0,2,0,0"/>
+              </StackPanel>
+              <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="BtnRunHardeningAudit" Content="Run 12-Point Audit" Style="{StaticResource SolidAccentButtonStyle}" Click="BtnRunHardeningAudit_Click" Margin="0,0,8,0"/>
+                <Button x:Name="BtnApplyHardening" Content="Apply Selected Hardening" Style="{StaticResource SuccessButton}" Click="BtnApplyHardening_Click" Margin="0,0,8,0"/>
+                <Button x:Name="BtnRevertHardening" Content="Revert Selected" Style="{StaticResource DangerButton}" Click="BtnRevertHardening_Click"/>
+              </StackPanel>
+            </Grid>
+
+            <DataGrid x:Name="HardeningChecksGrid" Grid.Row="1" IsReadOnly="False">
+              <DataGrid.Columns>
+                <DataGridCheckBoxColumn Header="Sel" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
+                <DataGridTemplateColumn Header="Status" Width="96" IsReadOnly="True">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <Border Background="{Binding StatusColor}" CornerRadius="4" Padding="7,2" HorizontalAlignment="Left">
+                        <TextBlock Text="{Binding StatusText}" Foreground="White" FontSize="10" FontWeight="Bold"/>
+                      </Border>
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="125" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Security Check" Binding="{Binding Name}" Width="210" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Current State" Binding="{Binding CurrentValue}" Width="*" IsReadOnly="True"/>
+              </DataGrid.Columns>
+            </DataGrid>
+
+            <Border Grid.Row="2" Style="{StaticResource CardBorder}" Margin="0,10,0,0" Padding="10">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="ACTIVE LISTENING TCP PORTS" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}" Margin="0,0,0,6"/>
+                <DataGrid x:Name="HardeningPortsGrid" Grid.Row="1">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Port" Binding="{Binding Port}" Width="65"/>
+                    <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="150"/>
+                    <DataGridTextColumn Header="PID" Binding="{Binding ProcessId}" Width="65"/>
+                    <DataGridTextColumn Header="Local Address" Binding="{Binding LocalAddress}" Width="130"/>
+                    <DataGridTextColumn Header="Status" Binding="{Binding StatusText}" Width="150"/>
+                    <DataGridTextColumn Header="Notes" Binding="{Binding SensitiveDescription}" Width="*"/>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- SUB-TAB 3: QUARANTINE & EXCLUSIONS -->
+        <TabItem Header="Quarantine &amp; Exclusions">
+          <Grid Margin="0,10,0,4">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*"/>
+              <RowDefinition Height="195"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Style="{StaticResource CardBorder}" Padding="12">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                  <TextBlock Text="QUARANTINED FILES" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Restore Selected" Style="{StaticResource SuccessButton}" Click="BtnQuarantineRestore_Click" Margin="0,0,8,0"/>
+                    <Button Content="Delete Permanently" Style="{StaticResource DangerButton}" Click="BtnQuarantineDelete_Click" Margin="0,0,8,0"/>
+                    <Button Content="Refresh" Click="BtnQuarantineRefresh_Click"/>
+                  </StackPanel>
+                </Grid>
+                <DataGrid x:Name="QuarantineGrid" Grid.Row="1">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Threat" Binding="{Binding ThreatName}" Width="190"/>
+                    <DataGridTextColumn Header="Original Path" Binding="{Binding OriginalPath}" Width="*"/>
+                    <DataGridTextColumn Header="Quarantined At" Binding="{Binding QuarantineTime, StringFormat='yyyy-MM-dd HH:mm'}" Width="135"/>
+                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="95"/>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </Grid>
+            </Border>
+
+            <Border Grid.Row="1" Style="{StaticResource CardBorder}" Margin="0,10,0,0" Padding="12">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                  <TextBlock Text="SCAN EXCLUSIONS" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}" VerticalAlignment="Center"/>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Add Folder Exclusion..." Style="{StaticResource AccentButtonStyle}" Click="BtnAddExclusion_Click" Margin="0,0,8,0"/>
+                    <Button Content="Remove Selected" Style="{StaticResource DangerButton}" Click="BtnRemoveExclusion_Click"/>
+                  </StackPanel>
+                </Grid>
+                <ListBox x:Name="ExclusionsListBox" Grid.Row="1" Background="#121214" Foreground="{StaticResource AppText}" BorderBrush="{StaticResource PanelBorder}"/>
+              </Grid>
+            </Border>
+          </Grid>
+        </TabItem>
+
+        <!-- SUB-TAB 4: HISTORY & SCHEDULE -->
+        <TabItem Header="History &amp; Schedule">
+          <Grid Margin="0,10,0,4">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                  <TextBlock Text="SCHEDULED MALWARE SCAN" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Accent}"/>
+                  <TextBlock x:Name="ScanScheduleStatusText" Text="Checking scheduled scan task..." Foreground="{StaticResource MutedText}" FontSize="12" Margin="0,3,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                  <TextBox x:Name="ScanSchedTimeBox" Text="01:00" Width="72" Margin="0,0,8,0" ToolTip="24-hour time (HH:mm)"/>
+                  <Button Content="Register Weekly Scan" Style="{StaticResource AccentButtonStyle}" Click="BtnRegisterScanSched_Click" Margin="0,0,8,0"/>
+                  <Button Content="Remove Schedule" Style="{StaticResource DangerButton}" Click="BtnRemoveScanSched_Click"/>
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <DataGrid x:Name="ScanHistoryGrid" Grid.Row="1">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Start Time" Binding="{Binding StartTime, StringFormat='yyyy-MM-dd HH:mm'}" Width="135"/>
+                <DataGridTextColumn Header="Type" Binding="{Binding ScanType}" Width="95"/>
+                <DataGridTextColumn Header="Examined" Binding="{Binding FilesExamined}" Width="90"/>
+                <DataGridTextColumn Header="Scanned" Binding="{Binding FilesScanned}" Width="90"/>
+                <DataGridTextColumn Header="Threats" Binding="{Binding ThreatsDetected}" Width="75"/>
+                <DataGridTextColumn Header="Suspicious" Binding="{Binding SuspiciousFiles}" Width="85"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
+              </DataGrid.Columns>
+            </DataGrid>
+          </Grid>
+        </TabItem>
+      </TabControl>
 
       <!-- Footer Status Bar -->
       <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource PanelBorder}" BorderThickness="1" CornerRadius="8" Padding="12,7" Margin="0,12,0,0">

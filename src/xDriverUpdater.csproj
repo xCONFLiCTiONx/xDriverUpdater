@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>xDriverUpdater</RootNamespace>
     <AssemblyName>xSecurityCenter</AssemblyName>
-    <Version>3.0.0</Version>
+    <Version>3.1.0</Version>
     <Authors>Michael</Authors>
     <Description>xSecurityCenter — All-in-One Windows Security, Privacy, Network, Drive, Driver, Power &amp; System Suite</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>

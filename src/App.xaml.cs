@@ -178,6 +178,22 @@ public partial class App : System.Windows.Application
             return result.Success ? 0 : 1;
         }
 
+        if (cmd is "/scheduled" or "--scheduled-scan")
+        {
+            var db = new xScanner.Database.ScanDatabase();
+            var clam = new xScanner.Engines.ClamAV.ClamAvManager(db);
+            var orch = new xScanner.Core.ScanEngine.ScanOrchestrator(db, clam);
+            if (clam.IsInstalled())
+            {
+                await clam.UpdateDefinitionsAsync(new Progress<string>(Console.WriteLine));
+            }
+            await orch.RunBasicScanAsync(db.GetExclusions(), p =>
+            {
+                if (!string.IsNullOrEmpty(p.LogMessage)) Console.WriteLine(p.LogMessage);
+            });
+            return 0;
+        }
+
         if (cmd == "--scheduled-update")
         {
             var silentSvc = new SilentDriverUpdateService();

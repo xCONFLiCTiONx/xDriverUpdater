@@ -11,6 +11,13 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using xDriverUpdater.Models;
 using xDriverUpdater.Services;
+using xScanner.Core.Hardening;
+using xScanner.Core.ScanEngine;
+using xScanner.Core.ScanScheduler;
+using xScanner.Database;
+using xScanner.Database.Models;
+using xScanner.Engines.ClamAV;
+using xScanner.Quarantine;
 
 namespace xDriverUpdater;
 
@@ -46,6 +53,14 @@ public partial class MainWindow : Window
     private readonly NetworkDiagnosticsService _netDiag = new();
     private readonly DispatcherTimer _watchdogTimer = new() { Interval = TimeSpan.FromSeconds(20) };
     private readonly DispatcherTimer _driveTimer = new() { Interval = TimeSpan.FromMinutes(15) };
+    private readonly ScanDatabase _scanDb = new();
+    private readonly ClamAvManager _clamManager;
+    private readonly ScanOrchestrator _scanOrchestrator;
+    private readonly QuarantineManager _quarantineManager;
+    private readonly HardeningManager _hardeningManager = new();
+    private CancellationTokenSource? _malwareScanCts;
+    private bool _isMalwareScanning;
+    private List<HardeningCheckResult> _hardeningChecks = new();
 
     private System.Windows.Forms.NotifyIcon? _trayIcon;
     private bool _isExplicitExit;
@@ -83,6 +98,9 @@ public partial class MainWindow : Window
         _settings = _configStore.Load();
         _powerInspector = new PowerHardwareInspector(_powerCfg);
         _powerEngine = new SmartPlanEngine(_powerCfg);
+        _clamManager = new ClamAvManager(_scanDb);
+        _scanOrchestrator = new ScanOrchestrator(_scanDb, _clamManager);
+        _quarantineManager = new QuarantineManager(_scanDb);
         InitializeComponent();
         ContextEntriesGrid.ItemsSource = _contextEntries;
         RestoreWindowPlacement();
@@ -175,6 +193,7 @@ public partial class MainWindow : Window
         _monitorTimer.Stop();
         _watchdogTimer.Stop();
         _driveTimer.Stop();
+        try { _malwareScanCts?.Cancel(); _clamManager.KillActiveProcesses(); } catch { }
         DisposeTrayIcon();
     }
 
@@ -202,6 +221,7 @@ public partial class MainWindow : Window
 
         _watchdogTimer.Start();
         _driveTimer.Start();
+        RefreshScannerMetaUi();
 
         await Task.WhenAll(
             RefreshHardwareAndStoreAsync(),
@@ -1234,6 +1254,7 @@ public partial class MainWindow : Window
     private void SwitchView(string tag)
     {
         DashboardView.Visibility = tag == "Dashboard" ? Visibility.Visible : Visibility.Collapsed;
+        ScannerView.Visibility = tag == "Scanner" ? Visibility.Visible : Visibility.Collapsed;
         NetworkView.Visibility = tag == "Network" ? Visibility.Visible : Visibility.Collapsed;
         DrivesView.Visibility = tag == "Drives" ? Visibility.Visible : Visibility.Collapsed;
         DriversSubTabs.Visibility = tag == "Drivers" ? Visibility.Visible : Visibility.Collapsed;
@@ -1244,6 +1265,7 @@ public partial class MainWindow : Window
 
         PageTitleText.Text = tag switch
         {
+            "Scanner" => "Malware Scanner & Hardening",
             "Network" => "Network Diagnostics & Static IP",
             "Drives" => "Drive Sentinel",
             "Drivers" => "Drivers, Devices & Store",
@@ -2629,5 +2651,292 @@ public partial class MainWindow : Window
             $"Serial: {d.SerialNumber}  •  Power-On: {d.PowerOnHoursLabel}  •  TBW: {d.TotalBytesWrittenLabel}  •  Spare: {d.AvailableSpareLabel}";
         DriveSmartGrid.ItemsSource = d.SmartAttributes;
         DriveEventsGrid.ItemsSource = d.StorageEvents;
+    }
+
+    // ==================== MALWARE SCANNER, HARDENING & QUARANTINE (Merged from xScanner) ====================
+
+    private void LogScanner(string message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            ScannerTerminalBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+            ScannerTerminalBox.ScrollToEnd();
+        });
+    }
+
+    private void RefreshScannerMetaUi()
+    {
+        try
+        {
+            ScanClamStatusText.Text = _clamManager.IsInstalled()
+                ? _clamManager.GetDefinitionVersion()
+                : "Not installed (click Install)";
+            QuarantineGrid.ItemsSource = _scanDb.GetQuarantineRecords();
+            ExclusionsListBox.ItemsSource = _scanDb.GetExclusions();
+            ScanHistoryGrid.ItemsSource = _scanDb.GetScanRecords();
+            bool scheduled = SchedulerManager.IsTaskRegistered();
+            ScanScheduleStatusText.Text = scheduled
+                ? $"Active Windows Scheduled Task: '{SchedulerManager.DefaultTaskName}'"
+                : "No scheduled malware scan configured.";
+        }
+        catch { }
+    }
+
+    private void BtnClearScanTerminal_Click(object sender, RoutedEventArgs e) => ScannerTerminalBox.Clear();
+
+    private async void BtnBasicScan_Click(object sender, RoutedEventArgs e) => await RunMalwareScanAsync(fullScan: false);
+
+    private async void BtnFullScan_Click(object sender, RoutedEventArgs e) => await RunMalwareScanAsync(fullScan: true);
+
+    private async Task RunMalwareScanAsync(bool fullScan)
+    {
+        if (_isMalwareScanning) return;
+        _isMalwareScanning = true;
+        _malwareScanCts = new CancellationTokenSource();
+        var token = _malwareScanCts.Token;
+
+        BtnBasicScan.IsEnabled = false;
+        BtnFullScan.IsEnabled = false;
+        BtnStopScan.IsEnabled = true;
+        ScanStatusText.Text = "SCANNING";
+        ScanStatusText.Foreground = (System.Windows.Media.Brush)FindResource("AccentBright");
+        ScanProgressBar.IsIndeterminate = true;
+        LogScanner($"[INFO] Starting {(fullScan ? "Full System" : "Basic")} Scan...");
+
+        try
+        {
+            await Task.Run(async () =>
+            {
+                if (_clamManager.IsInstalled())
+                {
+                    LogScanner("[INFO] Updating ClamAV definitions...");
+                    var upProg = new Progress<string>(m => LogScanner($"[FRESHCLAM] {m}"));
+                    await _clamManager.UpdateDefinitionsAsync(upProg, token);
+                }
+
+                Action<ScanProgressEventArgs> onProgress = p =>
+                {
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (!string.IsNullOrEmpty(p.LogMessage))
+                            LogScanner(p.LogMessage);
+                        ScanCurrentFileText.Text = string.IsNullOrEmpty(p.CurrentFile) ? "Scanning..." : p.CurrentFile;
+                        ScanFilesCountText.Text = p.FilesScanned.ToString("N0");
+                        ScanThreatsCountText.Text = p.ThreatsDetected.ToString("N0");
+                        ScanProgressBar.IsIndeterminate = p.IsIndeterminate;
+                        if (!p.IsIndeterminate && p.TotalFiles > 0)
+                        {
+                            ScanProgressBar.Maximum = p.TotalFiles;
+                            ScanProgressBar.Value = Math.Min(p.FilesExamined, p.TotalFiles);
+                        }
+                        if (p.IsCompleted)
+                        {
+                            ScanProgressBar.IsIndeterminate = false;
+                            ScanProgressBar.Value = ScanProgressBar.Maximum > 0 ? ScanProgressBar.Maximum : 100;
+                            ScanStatusText.Text = p.ThreatsDetected > 0 ? "THREATS" : "CLEAN";
+                            ScanStatusText.Foreground = (System.Windows.Media.Brush)FindResource(p.ThreatsDetected > 0 ? "Danger" : "Success");
+                            ScanCurrentFileText.Text = $"Scan complete — Examined: {p.FilesExamined:N0}, Scanned: {p.FilesScanned:N0}, Threats: {p.ThreatsDetected}.";
+                            ShowTrayBalloon(
+                                p.ThreatsDetected > 0 ? "Malware Threat Alert" : "Malware Scan Clean",
+                                ScanCurrentFileText.Text,
+                                p.ThreatsDetected > 0 ? System.Windows.Forms.ToolTipIcon.Warning : System.Windows.Forms.ToolTipIcon.Info);
+                        }
+                    });
+                };
+
+                var exclusions = _scanDb.GetExclusions();
+                if (fullScan)
+                {
+                    await _scanOrchestrator.RunFullScanAsync(exclusions, onProgress, token);
+                }
+                else
+                {
+                    await _scanOrchestrator.RunBasicScanAsync(exclusions, onProgress, token);
+                }
+            }, token);
+        }
+        catch (OperationCanceledException)
+        {
+            LogScanner("[INFO] Scan cancelled by user.");
+            ScanStatusText.Text = "STOPPED";
+            ScanCurrentFileText.Text = "Scan stopped by user.";
+        }
+        catch (Exception ex)
+        {
+            LogScanner($"[ERROR] Scan failed: {ex.Message}");
+            ScanStatusText.Text = "ERROR";
+            DarkDialog.Show($"Scan failed: {ex.Message}", "Malware Scanner", DarkDialogKind.Error, this);
+        }
+        finally
+        {
+            _isMalwareScanning = false;
+            BtnBasicScan.IsEnabled = true;
+            BtnFullScan.IsEnabled = true;
+            BtnStopScan.IsEnabled = false;
+            ScanProgressBar.IsIndeterminate = false;
+            RefreshScannerMetaUi();
+        }
+    }
+
+    private void BtnStopScan_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_isMalwareScanning) return;
+        BtnStopScan.IsEnabled = false;
+        _malwareScanCts?.Cancel();
+        _clamManager.KillActiveProcesses();
+        LogScanner("[INFO] Stopping scan and terminating ClamAV child processes...");
+    }
+
+    private async void BtnInstallClam_Click(object sender, RoutedEventArgs e)
+    {
+        BtnInstallClam.IsEnabled = false;
+        ScanProgressBar.IsIndeterminate = false;
+        ScanProgressBar.Maximum = 100;
+        try
+        {
+            if (!_clamManager.IsInstalled())
+            {
+                LogScanner("[INFO] Downloading & verifying official ClamAV engine...");
+                var statusProg = new Progress<string>(m => { ScanCurrentFileText.Text = m; LogScanner($"[CLAMAV] {m}"); });
+                var pctProg = new Progress<double>(v => ScanProgressBar.Value = v);
+                bool ok = await _clamManager.DownloadAndInstallAsync(statusProg, pctProg);
+                DarkDialog.Show(ok ? "ClamAV engine installed and ready." : "ClamAV installation failed — check terminal output.", "ClamAV Setup", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+            }
+            else
+            {
+                LogScanner("[INFO] Updating ClamAV definitions...");
+                var upProg = new Progress<string>(m => LogScanner($"[FRESHCLAM] {m}"));
+                bool ok = await _clamManager.UpdateDefinitionsAsync(upProg);
+                DarkDialog.Show(ok ? "ClamAV definitions updated." : "Definition update finished with warnings — check terminal.", "ClamAV Update", ok ? DarkDialogKind.Success : DarkDialogKind.Info, this);
+            }
+            RefreshScannerMetaUi();
+        }
+        finally
+        {
+            BtnInstallClam.IsEnabled = true;
+        }
+    }
+
+    private async void BtnRunHardeningAudit_Click(object sender, RoutedEventArgs e)
+    {
+        BtnRunHardeningAudit.IsEnabled = false;
+        HardeningScoreText.Text = "Running 12-point security & hardening audit...";
+        try
+        {
+            var report = await _hardeningManager.RunSecurityAuditAsync();
+            RenderHardeningReport(report);
+        }
+        finally
+        {
+            BtnRunHardeningAudit.IsEnabled = true;
+        }
+    }
+
+    private async void BtnApplyHardening_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _hardeningChecks.Where(c => c.IsSelected).ToList();
+        if (selected.Count == 0)
+        {
+            DarkDialog.Show("Run a 12-Point Audit and select one or more checks first.", "Security Hardening", DarkDialogKind.Info, this);
+            return;
+        }
+        if (!DarkDialog.Confirm($"Apply hardening remediation to {selected.Count} selected check(s)?", "Confirm Hardening", DarkDialogKind.Question, this))
+            return;
+
+        BtnApplyHardening.IsEnabled = false;
+        try
+        {
+            var report = await _hardeningManager.ApplyHardeningAndVerifyAsync(null, selected);
+            RenderHardeningReport(report);
+            DarkDialog.Show($"Hardening applied. Security Score: {report.ScorePercentage}% ({report.PassedChecks}/{report.TotalChecks} passed).", "Hardening Complete", DarkDialogKind.Success, this);
+        }
+        finally
+        {
+            BtnApplyHardening.IsEnabled = true;
+        }
+    }
+
+    private async void BtnRevertHardening_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _hardeningChecks.Where(c => c.IsSelected).ToList();
+        if (selected.Count == 0) return;
+        if (!DarkDialog.Confirm($"Revert hardening on {selected.Count} selected check(s)?", "Revert Hardening", DarkDialogKind.Warning, this))
+            return;
+
+        BtnRevertHardening.IsEnabled = false;
+        try
+        {
+            var report = await _hardeningManager.RevertAllHardeningAsync(selected);
+            RenderHardeningReport(report);
+            DarkDialog.Show($"Reverted selected checks. Current Score: {report.ScorePercentage}%.", "Hardening Reverted", DarkDialogKind.Info, this);
+        }
+        finally
+        {
+            BtnRevertHardening.IsEnabled = true;
+        }
+    }
+
+    private void RenderHardeningReport(HardeningAuditReport report)
+    {
+        _hardeningChecks = report.CheckResults;
+        HardeningChecksGrid.ItemsSource = _hardeningChecks;
+        HardeningPortsGrid.ItemsSource = report.ListeningPorts;
+        HardeningScoreText.Text = $"Security Score: {report.ScorePercentage}%  •  {report.PassedChecks}/{report.TotalChecks} Hardened  •  {report.ListeningPorts.Count} Listening Ports";
+        HardeningDohText.Text = $"DoH: {report.DohStatus}  •  DNS: {(report.ActiveDnsServers.Count > 0 ? string.Join(", ", report.ActiveDnsServers) : "Auto")}";
+        AppendLog($"[Hardening] Audit complete: {report.ScorePercentage}% ({report.PassedChecks}/{report.TotalChecks}).");
+    }
+
+    private void BtnQuarantineRefresh_Click(object sender, RoutedEventArgs e) => RefreshScannerMetaUi();
+
+    private void BtnQuarantineRestore_Click(object sender, RoutedEventArgs e)
+    {
+        if (QuarantineGrid.SelectedItem is not QuarantineRecord rec) return;
+        if (!DarkDialog.Confirm($"Restore quarantined file to:\n{rec.OriginalPath}\n(and add it to exclusions)?", "Restore File", DarkDialogKind.Question, this))
+            return;
+        bool ok = _quarantineManager.RestoreFile(rec.Id, rec.OriginalPath, rec.QuarantinePath);
+        RefreshScannerMetaUi();
+        DarkDialog.Show(ok ? "File restored and added to exclusions." : "Could not restore file (source missing or access denied).", "Quarantine", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private void BtnQuarantineDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (QuarantineGrid.SelectedItem is not QuarantineRecord rec) return;
+        if (!DarkDialog.Confirm($"Permanently delete quarantined file?\n{rec.OriginalPath}", "Delete Permanently", DarkDialogKind.Warning, this))
+            return;
+        bool ok = _quarantineManager.DeletePermanently(rec.Id, rec.QuarantinePath);
+        RefreshScannerMetaUi();
+        DarkDialog.Show(ok ? "Quarantined file deleted permanently." : "Delete failed.", "Quarantine", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private void BtnAddExclusion_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog { Description = "Select folder to exclude from malware scans" };
+        if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+        {
+            _scanDb.AddExclusion(dlg.SelectedPath);
+            RefreshScannerMetaUi();
+        }
+    }
+
+    private void BtnRemoveExclusion_Click(object sender, RoutedEventArgs e)
+    {
+        if (ExclusionsListBox.SelectedItem is not string path) return;
+        _scanDb.RemoveExclusion(path);
+        RefreshScannerMetaUi();
+    }
+
+    private void BtnRegisterScanSched_Click(object sender, RoutedEventArgs e)
+    {
+        var time = string.IsNullOrWhiteSpace(ScanSchedTimeBox.Text) ? "01:00" : ScanSchedTimeBox.Text.Trim();
+        bool ok = SchedulerManager.ConfigureWeeklySchedule(SchedulerManager.DefaultTaskName, time, wakePc: true);
+        RefreshScannerMetaUi();
+        DarkDialog.Show(ok ? $"Weekly malware scan scheduled for {time}." : "Failed to register scheduled scan task.", "Scheduled Scan", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+    }
+
+    private void BtnRemoveScanSched_Click(object sender, RoutedEventArgs e)
+    {
+        bool ok = SchedulerManager.RemoveSchedule(SchedulerManager.DefaultTaskName);
+        RefreshScannerMetaUi();
+        DarkDialog.Show(ok ? "Scheduled malware scan removed." : "No scheduled task found or removal failed.", "Scheduled Scan", ok ? DarkDialogKind.Info : DarkDialogKind.Warning, this);
     }
 }
