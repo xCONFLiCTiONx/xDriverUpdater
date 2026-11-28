@@ -106,5 +106,36 @@ public sealed class ConfigStore
                 Description = "Curated baseline hardware-ID mappings for common NVIDIA, AMD, Intel, Realtek, Focusrite, and OEM drivers. Add your own JSON URLs or local folders below to extend capability!"
             });
         }
+
+        // Seamlessly migrate legacy xPowerPlan config if not yet populated
+        if (s.PowerPlanLastConfig == null && !s.PowerPlanManagedSchemeGuid.HasValue)
+        {
+            TryMigrateLegacyPowerPlan(s);
+        }
+    }
+
+    private sealed class LegacyPowerPlanState
+    {
+        public Guid? ManagedSchemeGuid { get; set; }
+        public PowerPlanConfig? LastConfig { get; set; }
+        public DateTime? LastAppliedUtc { get; set; }
+    }
+
+    private static void TryMigrateLegacyPowerPlan(AppSettings s)
+    {
+        try
+        {
+            var legacyPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "xPowerPlan", "config.json");
+            if (!File.Exists(legacyPath)) return;
+            var json = File.ReadAllText(legacyPath);
+            var legacy = JsonSerializer.Deserialize<LegacyPowerPlanState>(json, JsonOpts);
+            if (legacy == null) return;
+            s.PowerPlanManagedSchemeGuid = legacy.ManagedSchemeGuid;
+            s.PowerPlanLastConfig = legacy.LastConfig;
+            s.PowerPlanLastAppliedUtc = legacy.LastAppliedUtc;
+        }
+        catch { }
     }
 }

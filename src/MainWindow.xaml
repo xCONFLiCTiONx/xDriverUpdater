@@ -1,12 +1,12 @@
 <Window x:Class="xDriverUpdater.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="xSystemForge — Windows Driver, Telemetry &amp; Privacy Suite"
+        Title="xSystemForge — Windows Driver, Telemetry, Power &amp; Context Suite"
         Icon="pack://application:,,,/xSystemForge;component/icon.ico"
         Background="{StaticResource WindowBrush}"
         Foreground="{StaticResource TextBrush}"
-        Width="1060" Height="680"
-        MinWidth="860" MinHeight="560"
+        Width="1180" Height="720"
+        MinWidth="960" MinHeight="580"
         WindowStartupLocation="CenterScreen">
 
   <Grid Background="{StaticResource WindowBrush}">
@@ -28,7 +28,7 @@
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <TextBlock Text="xSystemForge" FontSize="20" FontWeight="Bold" Foreground="#F8FAFC"/>
             <Border Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="10" Padding="8,2" Margin="10,0,0,0" VerticalAlignment="Center">
-              <TextBlock Text="DRIVER, TELEMETRY &amp; PRIVACY SUITE" FontSize="10" FontWeight="SemiBold" Foreground="#60A5FA"/>
+              <TextBlock Text="DRIVER, TELEMETRY, POWER &amp; CONTEXT SUITE" FontSize="10" FontWeight="SemiBold" Foreground="#60A5FA"/>
             </Border>
             <Border x:Name="FormFactorPill" Background="#1F2937" BorderBrush="#374151" BorderThickness="1" CornerRadius="10" Padding="8,2" Margin="6,0,0,0" VerticalAlignment="Center">
               <TextBlock x:Name="FormFactorPillText" Text="DETECTING..." FontSize="10" FontWeight="SemiBold" Foreground="#A7F3D0"/>
@@ -617,6 +617,483 @@
               </DataGridTemplateColumn>
             </DataGrid.Columns>
           </DataGrid>
+        </Grid>
+      </TabItem>
+
+      <!-- TAB 8: POWER PLAN (Merged from xPowerPlan) -->
+      <TabItem x:Name="PowerPlanTabItem" Header="Power Plan">
+        <Grid Margin="0,10,0,10">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+
+          <!-- Power Plan Action Header Bar -->
+          <Grid Grid.Row="0" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+              <Border Background="#1E2430" BorderBrush="#334155" BorderThickness="1" CornerRadius="6" Padding="10,5" Margin="0,0,10,0">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="Active Plan: " Foreground="{StaticResource TextMutedBrush}" FontSize="12"/>
+                  <TextBlock x:Name="PowerActivePlanBadgeText" Text="Detecting..." FontWeight="SemiBold" Foreground="#4ADE80" FontSize="12"/>
+                </StackPanel>
+              </Border>
+              <TextBlock x:Name="PowerHeaderHint" Text="Zero background daemon — enforced natively via Windows powercfg." Foreground="{StaticResource TextMutedBrush}" FontSize="11.5" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+              <Button x:Name="PowerRefreshBtn" Content="Re-Scan Power" Click="PowerRefreshBtn_Click" Margin="0,0,8,0"/>
+              <Button x:Name="PowerQuickApplyBtn" Content="Generate &amp; Apply" Style="{StaticResource PrimaryButton}" Click="PowerApplyBtn_Click"/>
+            </StackPanel>
+          </Grid>
+
+          <!-- Power Plan Sub-Tabs -->
+          <TabControl x:Name="PowerSubTabs" Grid.Row="1" SelectionChanged="PowerSubTabs_SelectionChanged">
+
+            <!-- SUB-TAB 1: HARDWARE & SMART AUDIT -->
+            <TabItem Header="Hardware &amp; Audit">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,12,4,12">
+                <StackPanel>
+                  <UniformGrid Columns="2" Margin="0,0,0,12">
+                    <Border Style="{StaticResource CardBorder}" Margin="0,0,6,6">
+                      <StackPanel>
+                        <TextBlock Text="CPU &amp; ARCHITECTURE" FontSize="11" FontWeight="Bold" Foreground="#60A5FA"/>
+                        <TextBlock x:Name="PowerHwCpuText" Text="Detecting..." FontSize="14" FontWeight="SemiBold" Margin="0,5,0,2" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="PowerHwCpuDetailText" Text="" Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardBorder}" Margin="6,0,0,6">
+                      <StackPanel>
+                        <TextBlock Text="GRAPHICS &amp; iGPU STATUS" FontSize="11" FontWeight="Bold" Foreground="#60A5FA"/>
+                        <TextBlock x:Name="PowerHwGpuText" Text="Detecting..." FontSize="14" FontWeight="SemiBold" Margin="0,5,0,2" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="PowerHwGpuDetailText" Text="" Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardBorder}" Margin="0,6,6,0">
+                      <StackPanel>
+                        <TextBlock Text="STORAGE &amp; BUS TOPOLOGY" FontSize="11" FontWeight="Bold" Foreground="#60A5FA"/>
+                        <TextBlock x:Name="PowerHwStorageText" Text="Detecting..." FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardBorder}" Margin="6,6,0,0">
+                      <StackPanel>
+                        <TextBlock Text="PLATFORM, SLEEP &amp; xTaskForge" FontSize="11" FontWeight="Bold" Foreground="#60A5FA"/>
+                        <TextBlock x:Name="PowerHwPlatformText" Text="Detecting..." FontSize="12" Margin="0,5,0,2" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="PowerHwSleepText" Text="" Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Border>
+                  </UniformGrid>
+
+                  <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                      <Grid Margin="0,0,0,10">
+                        <TextBlock Text="SMART AUDIT OF CURRENT ACTIVE PLAN" FontSize="11" FontWeight="Bold" Foreground="#60A5FA" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PowerAuditSummaryText" HorizontalAlignment="Right" Foreground="{StaticResource TextMutedBrush}" FontSize="12"/>
+                      </Grid>
+
+                      <ItemsControl x:Name="PowerAuditList">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <Border Background="#14171E" BorderBrush="#262C38" BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,8">
+                              <Grid>
+                                <Grid.ColumnDefinitions>
+                                  <ColumnDefinition Width="58"/>
+                                  <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Background="{Binding BadgeColor}" CornerRadius="4" Padding="6,2" VerticalAlignment="Top" HorizontalAlignment="Left">
+                                  <TextBlock Text="{Binding BadgeText}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                                </Border>
+                                <StackPanel Grid.Column="1">
+                                  <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13"/>
+                                    <TextBlock Text="{Binding Category, StringFormat='  •  {0}'}" Foreground="{StaticResource TextMutedBrush}" FontSize="11" VerticalAlignment="Center"/>
+                                  </StackPanel>
+                                  <TextBlock Text="{Binding Detail}" Foreground="{StaticResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                </StackPanel>
+                              </Grid>
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
+            <!-- SUB-TAB 2: TUNE & OPTIONS -->
+            <TabItem Header="Tune &amp; Options">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,12,4,12">
+                <StackPanel>
+                  <TextBlock Text="CHOOSE A HARDWARE-TUNED PRESET (THEN CUSTOMIZE ANY OPTION BELOW)" FontSize="11" FontWeight="Bold" Foreground="#60A5FA" Margin="2,0,0,8"/>
+                  <UniformGrid Columns="4" Margin="0,0,0,14">
+                    <Button x:Name="PresetDevBtn" Click="PresetDevBtn_Click" Margin="0,0,6,0" Padding="12" HorizontalContentAlignment="Left">
+                      <StackPanel>
+                        <TextBlock Text="Smart Dev &amp; AI" FontWeight="Bold" FontSize="13"/>
+                        <TextBlock Text="Recommended for builds, IDEs &amp; RTX. Snappy boost, cool idle, S3 sleep." Foreground="{StaticResource TextMutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="PresetPerfBtn" Click="PresetPerfBtn_Click" Margin="3,0,3,0" Padding="12" HorizontalContentAlignment="Left">
+                      <StackPanel>
+                        <TextBlock Text="Max Performance" FontWeight="Bold" FontSize="13"/>
+                        <TextBlock Text="Aggressive CPU boost, EPP 0%, zero PCIe/NVMe/AHCI sleep latency." Foreground="{StaticResource TextMutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="PresetQuietBtn" Click="PresetQuietBtn_Click" Margin="3,0,3,0" Padding="12" HorizontalContentAlignment="Left">
+                      <StackPanel>
+                        <TextBlock Text="Cool &amp; Quiet" FontWeight="Bold" FontSize="13"/>
+                        <TextBlock Text="Lower fan noise &amp; heat with Efficient boost, EPP 55% and faster idle sleep." Foreground="{StaticResource TextMutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="PresetCustomBtn" Click="PresetCustomBtn_Click" Margin="6,0,0,0" Padding="12" HorizontalContentAlignment="Left">
+                      <StackPanel>
+                        <TextBlock Text="Custom" FontWeight="Bold" FontSize="13"/>
+                        <TextBlock Text="Manual control over every Windows power parameter below." Foreground="{StaticResource TextMutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                      </StackPanel>
+                    </Button>
+                  </UniformGrid>
+
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="12"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left Column -->
+                    <StackPanel Grid.Column="0">
+                      <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                        <StackPanel>
+                          <TextBlock Text="SLEEP, DISPLAY &amp; xTaskForge INTEGRATION" FontSize="11" FontWeight="Bold" Foreground="#60A5FA" Margin="0,0,0,10"/>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Turn off display after (min, 0 = Never)" VerticalAlignment="Center"/>
+                            <TextBox x:Name="PowerDisplayOffBox" Grid.Column="1" TextChanged="PowerOptionChanged"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Put computer to sleep after (min, 0 = Never)" VerticalAlignment="Center"/>
+                            <TextBox x:Name="PowerSleepAfterBox" Grid.Column="1" TextChanged="PowerOptionChanged"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Hibernate after (min, 0 = Never)" VerticalAlignment="Center"/>
+                            <TextBox x:Name="PowerHibernateAfterBox" Grid.Column="1" TextChanged="PowerOptionChanged"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Wake Timers" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="PowerWakeTimersCombo" Grid.Column="1" SelectionChanged="PowerOptionChanged">
+                              <ComboBoxItem Content="Disable (No phantom wakes)" Tag="0"/>
+                              <ComboBoxItem Content="Enable All" Tag="1"/>
+                              <ComboBoxItem Content="Important Wake Timers Only" Tag="2"/>
+                            </ComboBox>
+                          </Grid>
+
+                          <CheckBox x:Name="PowerRespectMediaCheck" Content="Respect xTaskForge &amp; Media Keep-Awake (music/video prevent sleep)" Margin="0,0,0,6" Checked="PowerOptionChanged" Unchecked="PowerOptionChanged"/>
+                          <CheckBox x:Name="PowerRequirePassCheck" Content="Require password on wakeup from sleep" Margin="0,0,0,6" Checked="PowerOptionChanged" Unchecked="PowerOptionChanged"/>
+                          <CheckBox x:Name="PowerAllowHybridCheck" Content="Allow Hybrid Sleep (disabled automatically if Hypervisor active)" Checked="PowerOptionChanged" Unchecked="PowerOptionChanged"/>
+                        </StackPanel>
+                      </Border>
+
+                      <Border Style="{StaticResource CardBorder}">
+                        <StackPanel>
+                          <TextBlock Text="PLAN MANAGEMENT &amp; SAFETY" FontSize="11" FontWeight="Bold" Foreground="#60A5FA" Margin="0,0,0,10"/>
+
+                          <TextBlock Text="Power Plan Name" Foreground="{StaticResource TextMutedBrush}" FontSize="12" Margin="0,0,0,4"/>
+                          <TextBox x:Name="PowerPlanNameBox" Margin="0,0,0,10" TextChanged="PowerOptionChanged"/>
+
+                          <CheckBox x:Name="PowerReusePlanCheck" Content="Reuse a single managed power plan (keeps Windows plan list clean)" Margin="0,0,0,6" Checked="PowerOptionChanged" Unchecked="PowerOptionChanged"/>
+                          <CheckBox x:Name="PowerBackupPrevCheck" Content="Auto-backup previous active plan (.pow) before applying" Margin="0,0,0,6" Checked="PowerOptionChanged" Unchecked="PowerOptionChanged"/>
+                          <CheckBox x:Name="PowerUnhideAdvancedCheck" Content="Unhide Boost Mode, EPP &amp; NVMe settings in Windows Control Panel" Checked="PowerOptionChanged" Unchecked="PowerOptionChanged"/>
+                        </StackPanel>
+                      </Border>
+                    </StackPanel>
+
+                    <!-- Right Column -->
+                    <StackPanel Grid.Column="2">
+                      <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                        <StackPanel>
+                          <TextBlock Text="CPU TUNING (AMD RYZEN / CPPC2)" FontSize="11" FontWeight="Bold" Foreground="#60A5FA" Margin="0,0,0,10"/>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Processor Performance Boost Mode" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="PowerBoostModeCombo" Grid.Column="1" SelectionChanged="PowerOptionChanged">
+                              <ComboBoxItem Content="Disabled (Base clock only)" Tag="0"/>
+                              <ComboBoxItem Content="Enabled" Tag="1"/>
+                              <ComboBoxItem Content="Aggressive" Tag="2"/>
+                              <ComboBoxItem Content="Efficient Enabled" Tag="3"/>
+                              <ComboBoxItem Content="Efficient Aggressive" Tag="4"/>
+                            </ComboBox>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Energy Perf Preference (EPP: 0=Perf, 100=Eco)" VerticalAlignment="Center"/>
+                            <Slider x:Name="PowerEppSlider" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" VerticalAlignment="Center" ValueChanged="PowerOptionChanged"/>
+                            <TextBlock x:Name="PowerEppValueText" Grid.Column="2" Text="20%" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Minimum Processor State (%)" VerticalAlignment="Center"/>
+                            <Slider x:Name="PowerMinCpuSlider" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" VerticalAlignment="Center" ValueChanged="PowerOptionChanged"/>
+                            <TextBlock x:Name="PowerMinCpuValueText" Grid.Column="2" Text="5%" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Maximum Processor State (%)" VerticalAlignment="Center"/>
+                            <Slider x:Name="PowerMaxCpuSlider" Grid.Column="1" Minimum="50" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" VerticalAlignment="Center" ValueChanged="PowerOptionChanged"/>
+                            <TextBlock x:Name="PowerMaxCpuValueText" Grid.Column="2" Text="100%" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Core Parking Min Cores (100% = No Parking)" VerticalAlignment="Center"/>
+                            <Slider x:Name="PowerCoreParkingSlider" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="10" IsSnapToTickEnabled="True" VerticalAlignment="Center" ValueChanged="PowerOptionChanged"/>
+                            <TextBlock x:Name="PowerCoreParkingValueText" Grid.Column="2" Text="100%" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                          </Grid>
+
+                          <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="System Cooling Policy" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="PowerCoolingCombo" Grid.Column="1" SelectionChanged="PowerOptionChanged">
+                              <ComboBoxItem Content="Passive (Throttle first)" Tag="0"/>
+                              <ComboBoxItem Content="Active (Fan first)" Tag="1"/>
+                            </ComboBox>
+                          </Grid>
+                        </StackPanel>
+                      </Border>
+
+                      <Border Style="{StaticResource CardBorder}">
+                        <StackPanel>
+                          <TextBlock Text="GPU, PCIe, STORAGE &amp; USB TUNING" FontSize="11" FontWeight="Bold" Foreground="#60A5FA" Margin="0,0,0,10"/>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="PCIe Link State Power Mgmt (RTX / NVMe)" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="PowerPcieCombo" Grid.Column="1" SelectionChanged="PowerOptionChanged">
+                              <ComboBoxItem Content="Off (Lowest latency)" Tag="0"/>
+                              <ComboBoxItem Content="Moderate power savings" Tag="1"/>
+                              <ComboBoxItem Content="Maximum power savings" Tag="2"/>
+                            </ComboBox>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="SATA AHCI Link Power Management" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="PowerAhciCombo" Grid.Column="1" SelectionChanged="PowerOptionChanged">
+                              <ComboBoxItem Content="Active (Zero SSD stutter)" Tag="0"/>
+                              <ComboBoxItem Content="HIPM" Tag="1"/>
+                              <ComboBoxItem Content="HIPM + DIPM" Tag="2"/>
+                            </ComboBox>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="95"/><ColumnDefinition Width="10"/><ColumnDefinition Width="95"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="NVMe Idle (ms) / Latency Tol. (ms)" VerticalAlignment="Center"/>
+                            <TextBox x:Name="PowerNvmeIdleBox" Grid.Column="1" TextChanged="PowerOptionChanged"/>
+                            <TextBox x:Name="PowerNvmeLatBox" Grid.Column="3" TextChanged="PowerOptionChanged"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Turn off hard disk after (min, 0 = Never)" VerticalAlignment="Center"/>
+                            <TextBox x:Name="PowerDiskOffBox" Grid.Column="1" TextChanged="PowerOptionChanged"/>
+                          </Grid>
+
+                          <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="USB 3 Link Power Management" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="PowerUsb3Combo" Grid.Column="1" SelectionChanged="PowerOptionChanged">
+                              <ComboBoxItem Content="Off (Best for USB drives)" Tag="0"/>
+                              <ComboBoxItem Content="Minimum" Tag="1"/>
+                              <ComboBoxItem Content="Moderate" Tag="2"/>
+                              <ComboBoxItem Content="Maximum" Tag="3"/>
+                            </ComboBox>
+                          </Grid>
+
+                          <CheckBox x:Name="PowerUsbSuspendCheck" Content="Enable USB Selective Suspend (Uncheck for external USB 3.0 drives)" Checked="PowerOptionChanged" Unchecked="PowerOptionChanged"/>
+                        </StackPanel>
+                      </Border>
+                    </StackPanel>
+                  </Grid>
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
+            <!-- SUB-TAB 3: DIFF & ENFORCE -->
+            <TabItem Header="Diff &amp; Enforce">
+              <Grid Margin="0,12,0,4">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                  <RowDefinition Height="130"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                  <TextBlock x:Name="PowerDiffSummaryText" Text="Comparing current active plan against your configured power plan..." Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center"/>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="PowerEnforceBtn" Content="Generate, Apply &amp; Verify" Style="{StaticResource SuccessButton}" Click="PowerApplyBtn_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <DataGrid x:Name="PowerDiffGrid" Grid.Row="1" Margin="0,0,0,10">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="95"/>
+                    <DataGridTextColumn Header="Windows Power Setting" Binding="{Binding SettingName}" Width="240"/>
+                    <DataGridTextColumn Header="Current Active" Binding="{Binding CurrentValue}" Width="145"/>
+                    <DataGridTextColumn Header="Target Value" Binding="{Binding TargetValue}" Width="155"/>
+                    <DataGridTemplateColumn Header="Delta" Width="80">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                          <Border Background="{Binding StatusColor}" CornerRadius="4" Padding="6,2" HorizontalAlignment="Left">
+                            <TextBlock Text="{Binding StatusText}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                          </Border>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Why" Binding="{Binding Reason}" Width="*"/>
+                  </DataGrid.Columns>
+                </DataGrid>
+
+                <Border Grid.Row="2" Style="{StaticResource CardBorder}" Padding="10">
+                  <Grid>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="ENFORCEMENT &amp; VERIFICATION LOG" FontSize="10" FontWeight="Bold" Foreground="#60A5FA" Margin="0,0,0,4"/>
+                    <TextBox x:Name="PowerLogBox" Grid.Row="1" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11.5" BorderThickness="0" Background="#0D1016"/>
+                  </Grid>
+                </Border>
+              </Grid>
+            </TabItem>
+
+            <!-- SUB-TAB 4: MANAGE WINDOWS PLANS -->
+            <TabItem Header="Manage Windows Plans">
+              <Grid Margin="0,12,0,4">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="0,0,0,10">
+                  <TextBlock Text="All Windows power plans installed on this machine. Switch, export .pow backups, or remove unused clutter plans." Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center"/>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Set Selected Active" Style="{StaticResource PrimaryButton}" Click="PowerSetActivePlanBtn_Click" Margin="0,0,8,0"/>
+                    <Button Content="Export .pow Backup" Click="PowerExportPlanBtn_Click" Margin="0,0,8,0"/>
+                    <Button Content="Delete Selected" Style="{StaticResource DangerButton}" Click="PowerDeletePlanBtn_Click"/>
+                  </StackPanel>
+                </Grid>
+
+                <DataGrid x:Name="PowerPlansGrid" Grid.Row="1">
+                  <DataGrid.Columns>
+                    <DataGridTemplateColumn Header="Status" Width="80">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                          <TextBlock Text="{Binding ActiveBadge}" Foreground="#4ADE80" FontWeight="Bold" FontSize="11"/>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Power Plan Name" Binding="{Binding Name}" Width="340"/>
+                    <DataGridTextColumn Header="Scheme GUID" Binding="{Binding Guid}" Width="310"/>
+                    <DataGridCheckBoxColumn Header="Windows Built-In" Binding="{Binding IsBuiltIn, Mode=OneWay}" Width="125"/>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </Grid>
+            </TabItem>
+          </TabControl>
+        </Grid>
+      </TabItem>
+
+      <!-- TAB 9: CONTEXT MENUS, STARTUP, INSTALLED APPS & WIN+X (Merged from xContextGuard) -->
+      <TabItem x:Name="ContextGuardTabItem" Header="Context &amp; Startup">
+        <Grid Margin="0,10,0,10">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <!-- Filter & Search Bar -->
+          <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="225"/>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="ContextSearchBox" Margin="0,0,8,0" ToolTip="Search context menu names, commands, startup items, or registry paths" TextChanged="ContextSearchBox_TextChanged"/>
+            <ComboBox x:Name="ContextLocationFilter" Grid.Column="1" Margin="0,0,8,0" SelectionChanged="ContextLocationFilter_SelectionChanged">
+              <ComboBoxItem Content="All locations" IsSelected="True"/>
+              <ComboBoxItem Content="Installed applications"/>
+              <ComboBoxItem Content="Installed apps (Missing files)"/>
+              <ComboBoxItem Content="Startup items (All)"/>
+              <ComboBoxItem Content="Startup (Registry)"/>
+              <ComboBoxItem Content="Startup (Folders)"/>
+              <ComboBoxItem Content="Win+X menu"/>
+              <ComboBoxItem Content="File context menu"/>
+              <ComboBoxItem Content="Folder context menu"/>
+              <ComboBoxItem Content="Folder background"/>
+              <ComboBoxItem Content="Drive context menu"/>
+              <ComboBoxItem Content="Desktop background"/>
+            </ComboBox>
+            <Button x:Name="ContextRefreshBtn" Grid.Column="2" Content="Scan Again" Click="ContextRefresh_Click" Margin="0,0,8,0"/>
+            <Button x:Name="ContextRestartExplorerBtn" Grid.Column="3" Content="Restart Explorer" ToolTip="Restart Windows Explorer to apply Win+X changes" Click="ContextRestartExplorer_Click"/>
+          </Grid>
+
+          <!-- Entries DataGrid -->
+          <DataGrid x:Name="ContextEntriesGrid" Grid.Row="1" MouseDoubleClick="ContextEntriesGrid_MouseDoubleClick">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="2*"/>
+              <DataGridTextColumn Header="Menu Location" Binding="{Binding Location}" Width="2*"/>
+              <DataGridTextColumn Header="Type" Binding="{Binding TypeLabel}" Width="128"/>
+              <DataGridTemplateColumn Header="Status" Width="105">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate>
+                    <Border Background="{Binding StatusBadgeBg}" CornerRadius="4" Padding="7,2" HorizontalAlignment="Left" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBadgeFg}" FontSize="11" FontWeight="SemiBold"/>
+                    </Border>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTextColumn Header="Command / Target" Binding="{Binding Command}" Width="3*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+
+          <!-- Bottom Actions Bar -->
+          <Grid Grid.Row="2" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock x:Name="ContextStatusText" Text="Scanning context menus, startup items, Win+X, and installed apps..." Foreground="{StaticResource TextBrush}" FontSize="12"/>
+              <TextBlock Text="All edits, toggles, and deletions are automatically backed up to JSON before applying." Foreground="{StaticResource TextMutedBrush}" FontSize="11" Margin="0,2,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+              <Button Content="Edit" Click="ContextEdit_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,6,0"/>
+              <Button Content="Backup" Click="ContextBackup_Click" Margin="0,0,6,0"/>
+              <Button Content="Restore Backup" Click="ContextRestore_Click" Margin="0,0,6,0"/>
+              <Button Content="Enable" Click="ContextEnable_Click" Style="{StaticResource SuccessButton}" Margin="0,0,6,0"/>
+              <Button Content="Disable" Click="ContextDisable_Click" Margin="0,0,6,0"/>
+              <Button Content="Delete" Click="ContextDelete_Click" Style="{StaticResource DangerButton}"/>
+            </StackPanel>
+          </Grid>
         </Grid>
       </TabItem>
     </TabControl>

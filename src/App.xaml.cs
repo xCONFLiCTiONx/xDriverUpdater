@@ -22,7 +22,7 @@ public partial class App : Application
                 return;
             }
             DarkDialog.Show($"Unexpected error:\n{ex.Exception.Message}\n\n{ex.Exception.StackTrace}",
-                "xDriverUpdater Error", DarkDialogKind.Error);
+                "xSystemForge Error", DarkDialogKind.Error);
             ex.Handled = true;
         };
 
@@ -45,22 +45,82 @@ public partial class App : Application
         var cmd = args[0].Trim().ToLowerInvariant();
         if (cmd is "--help" or "-h" or "/?")
         {
-            Console.WriteLine("xDriverUpdater — Smart Hardware-Aware Windows Driver Manager");
+            Console.WriteLine("xSystemForge — All-in-One Windows Driver, Telemetry, Debloat & Power Plan Suite");
             Console.WriteLine("Usage:");
-            Console.WriteLine("  xDriverUpdater.exe                Launch GUI");
-            Console.WriteLine("  xDriverUpdater.exe --audit        Inspect hardware, OEM/laptop status, and driver health");
-            Console.WriteLine("  xDriverUpdater.exe --scan         Scan Windows Update + Direct Manufacturer + Repositories");
-            Console.WriteLine("  xDriverUpdater.exe --backup [dir] Export all third-party drivers via pnputil");
-            Console.WriteLine("  xDriverUpdater.exe --list-repos   List configured driver repositories");
-            Console.WriteLine("  xDriverUpdater.exe --scheduled-update  Silently check, download & install updates (alerts xSecurity on failure)");
-            Console.WriteLine("  xDriverUpdater.exe --register-task [Daily|Weekly] [HH:mm]  Register Windows Scheduled Task");
-            Console.WriteLine("  xDriverUpdater.exe --unregister-task                       Remove Windows Scheduled Task");
-            Console.WriteLine("  xDriverUpdater.exe --test-alert                            Send a test alert to xSecurity & connected devices");
+            Console.WriteLine("  xSystemForge.exe                                         Launch GUI");
+            Console.WriteLine("  xSystemForge.exe --audit                                 Inspect hardware, OEM/laptop status, and driver health");
+            Console.WriteLine("  xSystemForge.exe --scan                                  Scan Windows Update + Direct Manufacturer + Repositories");
+            Console.WriteLine("  xSystemForge.exe --backup [dir]                          Export all third-party drivers via pnputil");
+            Console.WriteLine("  xSystemForge.exe --list-repos                            List configured driver repositories");
+            Console.WriteLine("  xSystemForge.exe --scheduled-update                      Silently check, download & install updates (alerts xSecurity on failure)");
+            Console.WriteLine("  xSystemForge.exe --register-task [Daily|Weekly] [HH:mm]  Register Windows Scheduled Task");
+            Console.WriteLine("  xSystemForge.exe --unregister-task                       Remove Windows Scheduled Task");
+            Console.WriteLine("  xSystemForge.exe --test-alert                            Send a test alert to xSecurity & connected devices");
+            Console.WriteLine("  xSystemForge.exe --power-audit                           Inspect hardware and audit active Windows power plan");
+            Console.WriteLine("  xSystemForge.exe --power-list                            List all Windows power plans");
+            Console.WriteLine("  xSystemForge.exe --power-apply <dev|perf|quiet>          Generate, apply & verify power plan preset (alias: --apply)");
             return 0;
         }
 
         var configStore = new ConfigStore();
         var settings = configStore.Load();
+
+        if (cmd is "--power-list" or "--power-audit" or "--power-apply" or "--apply")
+        {
+            var powerCfg = new PowerCfgService();
+            var powerInspector = new PowerHardwareInspector(powerCfg);
+            var engine = new SmartPlanEngine(powerCfg);
+            var hw = await powerInspector.InspectAsync();
+
+            if (cmd == "--power-list")
+            {
+                Console.WriteLine("Windows Power Schemes:");
+                foreach (var s in hw.ExistingSchemes)
+                    Console.WriteLine($"  {(s.IsActive ? "*" : " ")} {s.Guid}  {s.Name}");
+                return 0;
+            }
+
+            if (cmd == "--power-audit")
+            {
+                Console.WriteLine($"OS:          {hw.OsCaption} (Build {hw.OsBuild})");
+                Console.WriteLine($"CPU:         {hw.CpuName} ({hw.PhysicalCores}C/{hw.LogicalProcessors}T)");
+                Console.WriteLine($"GPU(s):      {string.Join(", ", hw.Gpus.Select(g => g.Name))}");
+                Console.WriteLine($"AMD iGPU:    {(hw.HasDisabledAmdIgpu ? "Disabled in BIOS" : hw.HasActiveAmdGpu ? "Active" : "N/A")}");
+                Console.WriteLine($"Storage:     {string.Join(" | ", hw.Disks.Select(d => d.Summary))}");
+                Console.WriteLine($"Active Plan: {hw.ActiveScheme?.Name} ({hw.ActiveScheme?.Guid})");
+                Console.WriteLine();
+
+                var activeVals = hw.ActiveScheme != null ? powerCfg.QueryAllAcValues(hw.ActiveScheme.Guid) : new();
+                var findings = engine.AuditActivePlan(hw, activeVals);
+                Console.WriteLine("Smart Power Audit Findings:");
+                foreach (var f in findings)
+                    Console.WriteLine($"  [{f.BadgeText,-4}] ({f.Category}) {f.Title}\n         {f.Detail}");
+                return 0;
+            }
+
+            var mode = args.Length > 1 ? args[1].Trim().ToLowerInvariant() : "dev";
+            var preset = mode switch
+            {
+                "perf" or "max" or "performance" => Models.PresetKind.MaxPerformance,
+                "quiet" or "eco" or "cool" => Models.PresetKind.CoolAndQuiet,
+                _ => Models.PresetKind.SmartDevAi
+            };
+
+            var cfg = engine.CreatePreset(preset, hw);
+            var backupDir = System.IO.Path.Combine(settings.BackupDirectory, "PowerPlans");
+            var result = await engine.GenerateAndApplyAsync(cfg, hw, settings.PowerPlanManagedSchemeGuid, backupDir);
+            foreach (var line in result.Logs)
+                Console.WriteLine(line);
+
+            if (result.Success)
+            {
+                settings.PowerPlanManagedSchemeGuid = result.AppliedSchemeGuid;
+                settings.PowerPlanLastConfig = cfg;
+                settings.PowerPlanLastAppliedUtc = DateTime.UtcNow;
+                configStore.Save(settings);
+            }
+            return result.Success ? 0 : 1;
+        }
 
         if (cmd == "--scheduled-update")
         {

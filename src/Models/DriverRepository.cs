@@ -71,4 +71,9 @@ public sealed class AppSettings
     public bool WindowMaximized { get; set; }
     public Dictionary<string, string> PinnedDevices { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<RepositorySourceConfig> Repositories { get; set; } = new();
+
+    // Power Plan state (merged from xPowerPlan)
+    public Guid? PowerPlanManagedSchemeGuid { get; set; }
+    public PowerPlanConfig? PowerPlanLastConfig { get; set; }
+    public DateTime? PowerPlanLastAppliedUtc { get; set; }
 }

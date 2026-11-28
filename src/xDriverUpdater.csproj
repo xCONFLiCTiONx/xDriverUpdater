@@ -7,9 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>xDriverUpdater</RootNamespace>
     <AssemblyName>xSystemForge</AssemblyName>
-    <Version>2.0.0</Version>
+    <Version>2.2.0</Version>
     <Authors>Michael</Authors>
-    <Description>xSystemForge — All-in-One Windows Driver, Telemetry, Debloat &amp; Privacy Suite</Description>
+    <Description>xSystemForge — All-in-One Windows Driver, Telemetry, Power Plan &amp; Context Menu Suite</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>icon.ico</ApplicationIcon>
   </PropertyGroup>

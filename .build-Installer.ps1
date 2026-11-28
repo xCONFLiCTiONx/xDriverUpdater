@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds the standalone Inno Setup 6 installer (xDriverUpdater-Setup.exe) for xDriverUpdater v1.0.0.
+    Builds the standalone Inno Setup 6 installer (xSystemForge-Setup.exe) for xSystemForge v2.2.0.
 #>
 [CmdletBinding()]
 param(
@@ -22,9 +22,9 @@ $folderName    = "xSystemForge"
 $appName       = "xSystemForge"
 $installerBase = "xSystemForge-Setup"
 $exeName       = "xSystemForge.exe"
-$version       = "2.0.0"
+$version       = "2.2.0"
 $appId         = "E7C3A914-5B2D-4F8A-9C1E-6D4B8A2F7E05"
-$description   = "All-in-One Windows Driver, Telemetry, Debloat and Privacy Suite"
+$description   = "All-in-One Windows Driver, Telemetry, Power Plan and Context Menu Suite"
 $installDir    = Join-Path $env:LOCALAPPDATA "xPrograms\$folderName"
 $sourceDir     = Join-Path $repoRoot "src\bin\Release\net8.0-windows"
 $repoIcon      = Join-Path $repoRoot "src\icon.ico"

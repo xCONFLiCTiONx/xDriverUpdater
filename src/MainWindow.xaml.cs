@@ -1,9 +1,11 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -34,6 +36,12 @@ public partial class MainWindow : Window
     private readonly TelemetryController _telemetryController = new();
     private readonly NetworkMonitor _networkMonitor = new();
     private readonly DispatcherTimer _monitorTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly PowerCfgService _powerCfg = new();
+    private readonly PowerHardwareInspector _powerInspector;
+    private readonly SmartPlanEngine _powerEngine;
+    private readonly ContextMenuScanner _contextScanner = new();
+    private readonly ContextMenuManager _contextManager = new();
+    private readonly ObservableCollection<MenuEntry> _contextEntries = [];
 
     private AppSettings _settings = new();
     private SystemProfile _profile = new();
@@ -43,6 +51,11 @@ public partial class MainWindow : Window
     private List<DeviceUpdateGroup> _updateGroups = new();
     private List<TelemetryItem> _telemetryItems = new();
     private List<LiveConnection> _liveConnections = new();
+    private PowerHardwareProfile? _powerHw;
+    private Dictionary<Guid, uint> _powerActiveValues = new();
+    private PowerPlanConfig _powerConfig = new();
+    private List<MenuEntry> _allContextEntries = [];
+    private bool _suppressPowerUiEvents;
     private bool _monitorPaused;
     private bool _monitorBusy;
     private bool _loadingSettings;
@@ -50,8 +63,12 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        _suppressPowerUiEvents = true;
         _settings = _configStore.Load();
+        _powerInspector = new PowerHardwareInspector(_powerCfg);
+        _powerEngine = new SmartPlanEngine(_powerCfg);
         InitializeComponent();
+        ContextEntriesGrid.ItemsSource = _contextEntries;
         RestoreWindowPlacement();
         _monitorTimer.Tick += async (_, _) => await RefreshLiveMonitorAsync();
         Loaded += MainWindow_Loaded;
@@ -79,12 +96,12 @@ public partial class MainWindow : Window
         if (_settings.WindowWidth is >= 760 and <= 3840)
             Width = Math.Min(_settings.WindowWidth.Value, maxW);
         else
-            Width = Math.Min(920, maxW);
+            Width = Math.Min(1180, maxW);
 
         if (_settings.WindowHeight is >= 520 and <= 2160)
             Height = Math.Min(_settings.WindowHeight.Value, maxH);
         else
-            Height = Math.Min(640, maxH);
+            Height = Math.Min(720, maxH);
 
         if (_settings.WindowLeft.HasValue && _settings.WindowTop.HasValue)
         {
@@ -129,7 +146,12 @@ public partial class MainWindow : Window
         ReposGrid.ItemsSource = _settings.Repositories;
         RepoPresetCombo.ItemsSource = RepositoryManagerService.GetPublicRepositoryPresets().Select(p => p.Name).ToList();
         if (RepoPresetCombo.Items.Count > 0) RepoPresetCombo.SelectedIndex = 0;
-        await Task.WhenAll(RefreshHardwareAndStoreAsync(), RefreshScheduledTaskStatusAsync(), RefreshTelemetryAsync());
+        await Task.WhenAll(
+            RefreshHardwareAndStoreAsync(),
+            RefreshScheduledTaskStatusAsync(),
+            RefreshTelemetryAsync(),
+            RefreshPowerPlanAsync(initialLoad: true),
+            RefreshContextEntriesAsync());
     }
 
     private void ApplySettingsToUi()
@@ -1376,5 +1398,663 @@ public partial class MainWindow : Window
             DarkDialog.Show($"Failed to terminate {conn.ProcessName}: {ex.Message}", "Kill Process", DarkDialogKind.Warning, this);
         }
         await RefreshLiveMonitorAsync();
+    }
+
+    // ==================== POWER PLAN (MERGED FROM xPowerPlan) ====================
+
+    private async Task RefreshPowerPlanAsync(bool initialLoad = false)
+    {
+        SetPowerBusy(true, "Inspecting power hardware and active Windows power plans...");
+        try
+        {
+            _powerHw = await _powerInspector.InspectAsync();
+            _powerActiveValues = _powerHw.ActiveScheme != null
+                ? await Task.Run(() => _powerCfg.QueryAllAcValues(_powerHw.ActiveScheme.Guid))
+                : new Dictionary<Guid, uint>();
+
+            RenderPowerHardwareCards(_powerHw);
+            RenderPowerAudit(_powerHw, _powerActiveValues);
+            PowerPlansGrid.ItemsSource = _powerHw.ExistingSchemes;
+
+            if (initialLoad)
+            {
+                _powerConfig = _settings.PowerPlanLastConfig?.Clone()
+                    ?? _powerEngine.CreatePreset(PresetKind.SmartDevAi, _powerHw);
+                BindPowerConfigToUi(_powerConfig);
+            }
+
+            RefreshPowerDiff();
+            AppendLog($"[PowerPlan] Active plan: {_powerHw.ActiveScheme?.Name ?? "Unknown"} ({_powerHw.ExistingSchemes.Count} plans found).");
+            SetPowerBusy(false, $"Power plan inspected • {_powerHw.ExistingSchemes.Count} Windows power plans found.");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[PowerPlan] Inspection error: {ex.Message}");
+            SetPowerBusy(false, $"Power plan inspection error: {ex.Message}");
+        }
+    }
+
+    private void RenderPowerHardwareCards(PowerHardwareProfile hw)
+    {
+        PowerActivePlanBadgeText.Text = hw.ActiveScheme?.Name ?? "Unknown";
+
+        PowerHwCpuText.Text = hw.CpuName;
+        var cpuNotes = $"{hw.PhysicalCores} Cores / {hw.LogicalProcessors} Threads  •  Base {hw.MaxClockMhz} MHz";
+        if (hw.IsAmdCpu) cpuNotes += "  •  AMD CPPC2 aware";
+        PowerHwCpuDetailText.Text = cpuNotes;
+
+        PowerHwGpuText.Text = hw.Gpus.Count > 0 ? string.Join(" + ", hw.Gpus.Select(g => g.Name)) : "No GPU detected";
+        var gpuDetail = hw.Gpus.FirstOrDefault() is { } g0 ? $"Driver {g0.DriverVersion}" : "";
+        if (hw.HasDisabledAmdIgpu)
+            gpuDetail += "  •  AMD Radeon iGPU disabled in BIOS (dead AMD graphics power settings skipped)";
+        PowerHwGpuDetailText.Text = gpuDetail;
+
+        PowerHwStorageText.Text = hw.Disks.Count > 0
+            ? string.Join("\n", hw.Disks.Select(d => "• " + d.Summary))
+            : "No physical disks enumerated";
+
+        PowerHwPlatformText.Text = $"{hw.Motherboard}  •  {hw.TotalRamGb:F0} GB RAM  •  {(hw.HasBattery ? "Laptop (Battery)" : "Desktop (AC Only)")}";
+        var sleepBits = new List<string>();
+        if (hw.SupportsS3Standby) sleepBits.Add("S3 Standby");
+        if (hw.SupportsS0LowPowerIdle) sleepBits.Add("S0 Modern Standby");
+        if (hw.SupportsHibernate) sleepBits.Add("Hibernate");
+        if (hw.HypervisorBlocksHybridSleep) sleepBits.Add("Hybrid Sleep off (Hypervisor)");
+        PowerHwSleepText.Text = "Sleep States: " + string.Join(", ", sleepBits);
+    }
+
+    private void RenderPowerAudit(PowerHardwareProfile hw, Dictionary<Guid, uint> activeValues)
+    {
+        var findings = _powerEngine.AuditActivePlan(hw, activeValues);
+        PowerAuditList.ItemsSource = findings;
+
+        var tuneCount = findings.Count(f => f.Severity == PowerFindingSeverity.Warning);
+        var okCount = findings.Count(f => f.Severity == PowerFindingSeverity.Good);
+        PowerAuditSummaryText.Text = tuneCount > 0
+            ? $"{tuneCount} tuning {(tuneCount == 1 ? "opportunity" : "opportunities")} found • {okCount} optimal"
+            : $"Looking great! {okCount} checks optimal";
+    }
+
+    private void BindPowerConfigToUi(PowerPlanConfig cfg)
+    {
+        _suppressPowerUiEvents = true;
+        try
+        {
+            PowerPlanNameBox.Text = cfg.PlanName;
+            PowerReusePlanCheck.IsChecked = cfg.ReuseSingleManagedPlan;
+            PowerBackupPrevCheck.IsChecked = cfg.AutoBackupPreviousPlan;
+            PowerUnhideAdvancedCheck.IsChecked = cfg.UnhideUsefulAdvancedSettings;
+
+            PowerDisplayOffBox.Text = cfg.DisplayOffMinutes.ToString();
+            PowerSleepAfterBox.Text = cfg.SleepAfterMinutes.ToString();
+            PowerHibernateAfterBox.Text = cfg.HibernateAfterMinutes.ToString();
+            SelectPowerComboByTag(PowerWakeTimersCombo, cfg.WakeTimersMode);
+            PowerRespectMediaCheck.IsChecked = cfg.RespectMediaKeepAwake;
+            PowerRequirePassCheck.IsChecked = cfg.RequirePasswordOnWakeup;
+            PowerAllowHybridCheck.IsChecked = cfg.AllowHybridSleep;
+
+            SelectPowerComboByTag(PowerBoostModeCombo, cfg.BoostMode);
+            PowerEppSlider.Value = cfg.EnergyPerfPreference;
+            PowerEppValueText.Text = $"{cfg.EnergyPerfPreference}%";
+            PowerMinCpuSlider.Value = cfg.MinProcessorState;
+            PowerMinCpuValueText.Text = $"{cfg.MinProcessorState}%";
+            PowerMaxCpuSlider.Value = cfg.MaxProcessorState;
+            PowerMaxCpuValueText.Text = $"{cfg.MaxProcessorState}%";
+            PowerCoreParkingSlider.Value = cfg.CoreParkingMinCores;
+            PowerCoreParkingValueText.Text = $"{cfg.CoreParkingMinCores}%";
+            SelectPowerComboByTag(PowerCoolingCombo, cfg.CoolingPolicy);
+
+            SelectPowerComboByTag(PowerPcieCombo, cfg.PcieLinkStatePowerMgmt);
+            SelectPowerComboByTag(PowerAhciCombo, cfg.AhciLinkPowerMgmt);
+            PowerNvmeIdleBox.Text = cfg.PrimaryNvmeIdleMs.ToString();
+            PowerNvmeLatBox.Text = cfg.PrimaryNvmeLatTolMs.ToString();
+            PowerDiskOffBox.Text = cfg.DiskTurnOffMinutes.ToString();
+            SelectPowerComboByTag(PowerUsb3Combo, cfg.Usb3LinkPowerMgmt);
+            PowerUsbSuspendCheck.IsChecked = cfg.UsbSelectiveSuspend;
+
+            HighlightPowerPresetButton(cfg.Preset);
+        }
+        finally
+        {
+            _suppressPowerUiEvents = false;
+        }
+    }
+
+    private void ReadPowerUiIntoConfig()
+    {
+        _powerConfig.PlanName = string.IsNullOrWhiteSpace(PowerPlanNameBox.Text) ? "xPowerPlan — Custom" : PowerPlanNameBox.Text.Trim();
+        _powerConfig.ReuseSingleManagedPlan = PowerReusePlanCheck.IsChecked == true;
+        _powerConfig.AutoBackupPreviousPlan = PowerBackupPrevCheck.IsChecked == true;
+        _powerConfig.UnhideUsefulAdvancedSettings = PowerUnhideAdvancedCheck.IsChecked == true;
+
+        _powerConfig.DisplayOffMinutes = ParseNonNegativeInt(PowerDisplayOffBox.Text, 10);
+        _powerConfig.SleepAfterMinutes = ParseNonNegativeInt(PowerSleepAfterBox.Text, 15);
+        _powerConfig.HibernateAfterMinutes = ParseNonNegativeInt(PowerHibernateAfterBox.Text, 0);
+        _powerConfig.WakeTimersMode = GetPowerComboTagInt(PowerWakeTimersCombo, 2);
+        _powerConfig.RespectMediaKeepAwake = PowerRespectMediaCheck.IsChecked == true;
+        _powerConfig.RequirePasswordOnWakeup = PowerRequirePassCheck.IsChecked == true;
+        _powerConfig.AllowHybridSleep = PowerAllowHybridCheck.IsChecked == true;
+
+        _powerConfig.BoostMode = GetPowerComboTagInt(PowerBoostModeCombo, 4);
+        _powerConfig.EnergyPerfPreference = (int)Math.Round(PowerEppSlider.Value);
+        _powerConfig.MinProcessorState = (int)Math.Round(PowerMinCpuSlider.Value);
+        _powerConfig.MaxProcessorState = Math.Max(_powerConfig.MinProcessorState, (int)Math.Round(PowerMaxCpuSlider.Value));
+        _powerConfig.CoreParkingMinCores = (int)Math.Round(PowerCoreParkingSlider.Value);
+        _powerConfig.CoolingPolicy = GetPowerComboTagInt(PowerCoolingCombo, 1);
+
+        _powerConfig.PcieLinkStatePowerMgmt = GetPowerComboTagInt(PowerPcieCombo, 0);
+        _powerConfig.AhciLinkPowerMgmt = GetPowerComboTagInt(PowerAhciCombo, 0);
+        _powerConfig.PrimaryNvmeIdleMs = ParseNonNegativeInt(PowerNvmeIdleBox.Text, 200);
+        _powerConfig.PrimaryNvmeLatTolMs = ParseNonNegativeInt(PowerNvmeLatBox.Text, 15);
+        _powerConfig.DiskTurnOffMinutes = ParseNonNegativeInt(PowerDiskOffBox.Text, 0);
+        _powerConfig.Usb3LinkPowerMgmt = GetPowerComboTagInt(PowerUsb3Combo, 0);
+        _powerConfig.UsbSelectiveSuspend = PowerUsbSuspendCheck.IsChecked == true;
+
+        PowerEppValueText.Text = $"{_powerConfig.EnergyPerfPreference}%";
+        PowerMinCpuValueText.Text = $"{_powerConfig.MinProcessorState}%";
+        PowerMaxCpuValueText.Text = $"{_powerConfig.MaxProcessorState}%";
+        PowerCoreParkingValueText.Text = $"{_powerConfig.CoreParkingMinCores}%";
+    }
+
+    private void RefreshPowerDiff()
+    {
+        var rows = _powerEngine.ComputeDiff(_powerConfig, _powerActiveValues);
+        PowerDiffGrid.ItemsSource = rows;
+        var changes = rows.Count(r => r.IsChanged);
+        PowerDiffSummaryText.Text = $"{changes} of {rows.Count} settings differ from your current active plan ({_powerHw?.ActiveScheme?.Name ?? "Unknown"}).";
+    }
+
+    private void PowerOptionChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppressPowerUiEvents || !IsLoaded) return;
+        ReadPowerUiIntoConfig();
+        RefreshPowerDiff();
+    }
+
+    private void ApplyPowerPreset(PresetKind kind)
+    {
+        if (_powerHw == null) return;
+        _powerConfig = _powerEngine.CreatePreset(kind, _powerHw);
+        _powerConfig.ReuseSingleManagedPlan = PowerReusePlanCheck.IsChecked == true;
+        _powerConfig.AutoBackupPreviousPlan = PowerBackupPrevCheck.IsChecked == true;
+        _powerConfig.UnhideUsefulAdvancedSettings = PowerUnhideAdvancedCheck.IsChecked == true;
+        BindPowerConfigToUi(_powerConfig);
+        RefreshPowerDiff();
+        StatusFooterText.Text = $"Loaded '{_powerConfig.PlanName}' preset tailored to your hardware.";
+    }
+
+    private void HighlightPowerPresetButton(PresetKind kind)
+    {
+        var normalBg = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFromString("#252A36")!;
+        var activeBg = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFromString("#1E3A6D")!;
+        PresetDevBtn.Background = kind == PresetKind.SmartDevAi ? activeBg : normalBg;
+        PresetPerfBtn.Background = kind == PresetKind.MaxPerformance ? activeBg : normalBg;
+        PresetQuietBtn.Background = kind == PresetKind.CoolAndQuiet ? activeBg : normalBg;
+        PresetCustomBtn.Background = kind == PresetKind.Custom ? activeBg : normalBg;
+    }
+
+    private void PresetDevBtn_Click(object sender, RoutedEventArgs e) => ApplyPowerPreset(PresetKind.SmartDevAi);
+    private void PresetPerfBtn_Click(object sender, RoutedEventArgs e) => ApplyPowerPreset(PresetKind.MaxPerformance);
+    private void PresetQuietBtn_Click(object sender, RoutedEventArgs e) => ApplyPowerPreset(PresetKind.CoolAndQuiet);
+    private void PresetCustomBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _powerConfig.Preset = PresetKind.Custom;
+        HighlightPowerPresetButton(PresetKind.Custom);
+        StatusFooterText.Text = "Custom power mode — adjust any option below.";
+    }
+
+    private async void PowerRefreshBtn_Click(object sender, RoutedEventArgs e) => await RefreshPowerPlanAsync();
+
+    private async void PowerApplyBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_powerHw == null) return;
+        ReadPowerUiIntoConfig();
+
+        PowerSubTabs.SelectedIndex = 2; // Diff & Enforce
+        SetPowerBusy(true, $"Generating and enforcing '{_powerConfig.PlanName}'...");
+        PowerLogBox.Text = "Applying settings via Windows powercfg...\n";
+
+        var backupDir = Path.Combine(_settings.BackupDirectory, "PowerPlans");
+        var result = await _powerEngine.GenerateAndApplyAsync(_powerConfig, _powerHw, _settings.PowerPlanManagedSchemeGuid, backupDir);
+        PowerLogBox.Text = string.Join(Environment.NewLine, result.Logs);
+        AppendLog($"[PowerPlan] {result.Summary}");
+
+        if (result.Success)
+        {
+            _settings.PowerPlanManagedSchemeGuid = result.AppliedSchemeGuid;
+            _settings.PowerPlanLastConfig = _powerConfig.Clone();
+            _settings.PowerPlanLastAppliedUtc = DateTime.UtcNow;
+            _configStore.Save(_settings);
+
+            await RefreshPowerPlanAsync(initialLoad: false);
+            StatusFooterText.Text = result.Summary;
+            DarkDialog.Show(result.Summary, "Power Plan Enforced", DarkDialogKind.Success, this);
+        }
+        else
+        {
+            SetPowerBusy(false, result.Summary);
+            DarkDialog.Show(result.Summary, "Power Plan Error", DarkDialogKind.Error, this);
+        }
+    }
+
+    private void PowerSubTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.Source == PowerSubTabs && PowerSubTabs.SelectedIndex == 2 && _powerHw != null)
+        {
+            ReadPowerUiIntoConfig();
+            RefreshPowerDiff();
+        }
+    }
+
+    private async void PowerSetActivePlanBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (PowerPlansGrid.SelectedItem is not PowerSchemeInfo plan) return;
+        var (ok, outMsg) = _powerCfg.SetActiveScheme(plan.Guid);
+        if (!ok)
+        {
+            DarkDialog.Show($"Failed to activate '{plan.Name}':\n{outMsg}", "Power Plan", DarkDialogKind.Error, this);
+            return;
+        }
+        await RefreshPowerPlanAsync();
+        StatusFooterText.Text = $"Switched active power plan to '{plan.Name}'.";
+    }
+
+    private void PowerExportPlanBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (PowerPlansGrid.SelectedItem is not PowerSchemeInfo plan) return;
+        var dlg = new SaveFileDialog
+        {
+            Title = "Export Power Plan Backup",
+            Filter = "Windows Power Plan (*.pow)|*.pow",
+            FileName = $"{string.Concat(plan.Name.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_'))}.pow"
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            var (ok, outMsg) = _powerCfg.ExportScheme(plan.Guid, dlg.FileName);
+            StatusFooterText.Text = ok ? $"Exported '{plan.Name}' to {dlg.FileName}" : $"Export failed: {outMsg}";
+            AppendLog($"[PowerPlan] {StatusFooterText.Text}");
+        }
+    }
+
+    private async void PowerDeletePlanBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (PowerPlansGrid.SelectedItem is not PowerSchemeInfo plan) return;
+        if (plan.IsBuiltIn)
+        {
+            DarkDialog.Show("Built-in Windows power plans cannot be deleted.", "Power Plan", DarkDialogKind.Warning, this);
+            return;
+        }
+        if (plan.IsActive)
+        {
+            DarkDialog.Show("Switch to another power plan before deleting the currently active plan.", "Power Plan", DarkDialogKind.Warning, this);
+            return;
+        }
+        if (!DarkDialog.Confirm($"Delete power plan '{plan.Name}'?\n\nGUID: {plan.Guid}", "Confirm Delete", DarkDialogKind.Question, this))
+            return;
+
+        var (ok, outMsg) = _powerCfg.DeleteScheme(plan.Guid);
+        if (!ok)
+        {
+            DarkDialog.Show($"Failed to delete plan:\n{outMsg}", "Power Plan", DarkDialogKind.Error, this);
+            return;
+        }
+        await RefreshPowerPlanAsync();
+        StatusFooterText.Text = $"Deleted power plan '{plan.Name}'.";
+    }
+
+    private void SetPowerBusy(bool busy, string message)
+    {
+        PowerRefreshBtn.IsEnabled = !busy;
+        PowerQuickApplyBtn.IsEnabled = !busy;
+        if (PowerEnforceBtn != null) PowerEnforceBtn.IsEnabled = !busy;
+        if (!_isBusy) StatusFooterText.Text = message;
+    }
+
+    private static void SelectPowerComboByTag(ComboBox combo, int tagVal)
+    {
+        foreach (ComboBoxItem item in combo.Items)
+        {
+            if (int.TryParse(item.Tag?.ToString(), out var t) && t == tagVal)
+            {
+                combo.SelectedItem = item;
+                return;
+            }
+        }
+        if (combo.Items.Count > 0) combo.SelectedIndex = 0;
+    }
+
+    private static int GetPowerComboTagInt(ComboBox combo, int fallback)
+    {
+        if (combo.SelectedItem is ComboBoxItem item && int.TryParse(item.Tag?.ToString(), out var t))
+            return t;
+        return fallback;
+    }
+
+    private static int ParseNonNegativeInt(string? text, int fallback)
+        => int.TryParse(text?.Trim(), out var v) && v >= 0 ? v : fallback;
+
+    // ==================== CONTEXT MENUS, STARTUP, INSTALLED APPS & WIN+X (xContextGuard) ====================
+
+    private MenuEntry? SelectedContextEntry => ContextEntriesGrid?.SelectedItem as MenuEntry;
+
+    private async Task RefreshContextEntriesAsync()
+    {
+        if (ContextRefreshBtn != null) ContextRefreshBtn.IsEnabled = false;
+        try
+        {
+            var scanned = await Task.Run(() => _contextScanner.Scan());
+            _allContextEntries = scanned;
+            Dispatcher.Invoke(() =>
+            {
+                ApplyContextFilters();
+                ContextStatusText.Text = $"Found {_allContextEntries.Count} entries. Select one to manage it.";
+                AppendLog($"[ContextGuard] Scan complete: {_allContextEntries.Count} entries across context menus, startup, Win+X, and installed apps.");
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                ContextStatusText.Text = "Scan failed.";
+                AppendLog($"[ContextGuard] Scan error: {ex.Message}");
+            });
+        }
+        finally
+        {
+            if (ContextRefreshBtn != null) ContextRefreshBtn.IsEnabled = true;
+        }
+    }
+
+    private void ApplyContextFilters()
+    {
+        if (ContextEntriesGrid == null) return;
+        var query = ContextSearchBox?.Text?.Trim() ?? "";
+        var selectedLocation = (ContextLocationFilter?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All locations";
+        var filtered = _allContextEntries.Where(e =>
+            string.IsNullOrWhiteSpace(query) ||
+            e.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            e.Command.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            e.RegistryPath.Contains(query, StringComparison.OrdinalIgnoreCase));
+
+        filtered = selectedLocation switch
+        {
+            "Installed applications" => filtered
+                .Where(e => e.Kind == EntryKind.InstalledApp)
+                .OrderByDescending(e => e.IsMissingFiles)
+                .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase),
+            "Installed apps (Missing files)" => filtered
+                .Where(e => e.Kind == EntryKind.InstalledApp && e.IsMissingFiles)
+                .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase),
+            "Startup items (All)" => filtered.Where(e => e.IsStartup),
+            "Startup (Registry)" => filtered.Where(e => e.Kind == EntryKind.StartupRegistry),
+            "Startup (Folders)" => filtered.Where(e => e.Kind == EntryKind.StartupFolder),
+            "Win+X menu" => filtered.Where(e => e.Kind == EntryKind.WinXShortcut),
+            "File context menu" => filtered.Where(e => e.Location.StartsWith("*", StringComparison.Ordinal)),
+            "Folder context menu" => filtered.Where(e => e.Location is "Directory\\shell" or "Folder\\shell"),
+            "Folder background" => filtered.Where(e => e.Location.Contains("Background", StringComparison.OrdinalIgnoreCase)),
+            "Drive context menu" => filtered.Where(e => e.Location.StartsWith("Drive", StringComparison.OrdinalIgnoreCase)),
+            "Desktop background" => filtered.Where(e => e.Location.StartsWith("DesktopBackground", StringComparison.OrdinalIgnoreCase)),
+            _ => filtered
+        };
+
+        _contextEntries.Clear();
+        foreach (var entry in filtered) _contextEntries.Add(entry);
+        ContextStatusText.Text = $"Showing {_contextEntries.Count} of {_allContextEntries.Count} entries.";
+    }
+
+    private void ContextSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (IsLoaded) ApplyContextFilters();
+    }
+
+    private void ContextLocationFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsLoaded) ApplyContextFilters();
+    }
+
+    private async void ContextRefresh_Click(object sender, RoutedEventArgs e) => await RefreshContextEntriesAsync();
+
+    private void ContextRestartExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (!DarkDialog.Confirm(
+            "Restart Windows Explorer now to reload the taskbar and Win+X menu?",
+            "Restart Explorer", DarkDialogKind.Question, this))
+            return;
+
+        RunContextOperation(() =>
+        {
+            _contextManager.RestartExplorer();
+            ContextStatusText.Text = "Windows Explorer restarted.";
+            AppendLog("[ContextGuard] Restarted Windows Explorer.");
+        });
+    }
+
+    private void ContextEdit_Click(object sender, RoutedEventArgs e)
+    {
+        var entry = SelectedContextEntry;
+        if (entry is null)
+        {
+            DarkDialog.Show("Select an entry first to edit it.", "Nothing Selected", DarkDialogKind.Info, this);
+            return;
+        }
+
+        if (entry.Kind == EntryKind.ContextMenuHandler)
+        {
+            DarkDialog.Show(
+                "Shell extension handlers (COM CLSIDs) cannot be edited directly.\nUse Enable or Disable to toggle them, or Delete to remove them.",
+                "Cannot Edit Shell Extension", DarkDialogKind.Info, this);
+            return;
+        }
+
+        var dialog = new EditEntryDialog(entry) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+
+        RunContextOperation(() =>
+        {
+            if (entry.Kind == EntryKind.WinXShortcut)
+            {
+                _contextManager.SaveWinXShortcut(
+                    originalPath: entry.RegistryPath,
+                    displayName: dialog.EntryName,
+                    groupName: dialog.SelectedGroup,
+                    targetPath: dialog.TargetPath,
+                    arguments: dialog.Arguments,
+                    runAsAdmin: dialog.RunAsAdmin);
+
+                _ = RefreshContextEntriesAsync();
+                AppendLog($"[ContextGuard] Updated Win+X entry '{dialog.EntryName}'.");
+                PromptContextRestartExplorer($"Updated Win+X entry \"{dialog.EntryName}\".");
+            }
+            else if (entry.IsStartup)
+            {
+                var backup = _contextManager.SaveStartupEntry(
+                    entry,
+                    dialog.EntryName,
+                    dialog.TargetPath,
+                    dialog.Arguments,
+                    dialog.RunAsAdmin);
+                _ = RefreshContextEntriesAsync();
+                ContextStatusText.Text = $"Updated startup entry \"{dialog.EntryName}\". Backup: {Path.GetFileName(backup)}";
+                AppendLog($"[ContextGuard] {ContextStatusText.Text}");
+            }
+            else if (entry.Kind == EntryKind.InstalledApp)
+            {
+                var backup = _contextManager.SaveInstalledApp(entry, dialog.EntryName, dialog.TargetPath);
+                _ = RefreshContextEntriesAsync();
+                ContextStatusText.Text = $"Updated installed app entry \"{dialog.EntryName}\". Backup: {Path.GetFileName(backup)}";
+                AppendLog($"[ContextGuard] {ContextStatusText.Text}");
+            }
+            else if (entry.Kind == EntryKind.StaticVerb)
+            {
+                var backup = _contextManager.SaveStaticVerb(entry, dialog.EntryName, dialog.TargetPath);
+                _ = RefreshContextEntriesAsync();
+                ContextStatusText.Text = $"Updated command. Backup: {Path.GetFileName(backup)}";
+                AppendLog($"[ContextGuard] {ContextStatusText.Text}");
+            }
+        });
+    }
+
+    private void ContextEntriesGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectedContextEntry != null)
+            ContextEdit_Click(sender, e);
+    }
+
+    private void ContextEnable_Click(object sender, RoutedEventArgs e) => ChangeSelectedContextEntry(enabled: true);
+    private void ContextDisable_Click(object sender, RoutedEventArgs e) => ChangeSelectedContextEntry(enabled: false);
+
+    private void ChangeSelectedContextEntry(bool enabled)
+    {
+        var entry = SelectedContextEntry;
+        if (entry is null)
+        {
+            DarkDialog.Show("Select an entry first.", "Nothing Selected", DarkDialogKind.Info, this);
+            return;
+        }
+
+        var action = enabled ? "enable" : "disable";
+        bool alreadyInTargetState = entry.Kind == EntryKind.InstalledApp
+            ? entry.IsHiddenApp == !enabled
+            : entry.IsDisabled == !enabled;
+
+        if (alreadyInTargetState)
+        {
+            DarkDialog.Show($"\"{entry.Name}\" is already {(enabled ? "enabled" : "disabled")}.", "No Change Needed", DarkDialogKind.Info, this);
+            return;
+        }
+
+        if (!DarkDialog.Confirm(
+            $"Back up and {action} this entry?\n\n{entry.Name}\n{entry.RegistryPath}",
+            $"Confirm {action}", DarkDialogKind.Question, this))
+            return;
+
+        RunContextOperation(() =>
+        {
+            var backup = _contextManager.SetEnabled(entry, enabled);
+            _ = RefreshContextEntriesAsync();
+            var msg = $"Entry {(enabled ? "enabled" : "disabled")}. Backup: {Path.GetFileName(backup)}";
+            AppendLog($"[ContextGuard] {entry.Name}: {msg}");
+            if (entry.Kind == EntryKind.WinXShortcut)
+                PromptContextRestartExplorer(msg);
+            else
+                ContextStatusText.Text = msg;
+        });
+    }
+
+    private void ContextDelete_Click(object sender, RoutedEventArgs e)
+    {
+        var entry = SelectedContextEntry;
+        if (entry is null)
+        {
+            DarkDialog.Show("Select an entry first.", "Nothing Selected", DarkDialogKind.Info, this);
+            return;
+        }
+
+        var targetDescription = entry.Kind switch
+        {
+            EntryKind.WinXShortcut => "this Win+X shortcut file",
+            EntryKind.StartupRegistry => "this startup registry entry",
+            EntryKind.StartupFolder => "this startup folder item",
+            EntryKind.InstalledApp => "this installed application (Uninstall) registry entry",
+            _ => "this registry registration"
+        };
+
+        if (!DarkDialog.Confirm(
+            $"Permanently delete {targetDescription}? A backup will be created first.\n\n{entry.Name}\n{entry.RegistryPath}\n\nThis can affect Explorer or the associated application.",
+            "Confirm Permanent Deletion", DarkDialogKind.Warning, this))
+            return;
+
+        RunContextOperation(() =>
+        {
+            var backup = _contextManager.Delete(entry);
+            _ = RefreshContextEntriesAsync();
+            var msg = $"Deleted entry \"{entry.Name}\". Backup: {Path.GetFileName(backup)}";
+            AppendLog($"[ContextGuard] {msg}");
+            if (entry.Kind == EntryKind.WinXShortcut)
+                PromptContextRestartExplorer(msg);
+            else
+                ContextStatusText.Text = msg;
+        });
+    }
+
+    private void PromptContextRestartExplorer(string message)
+    {
+        ContextStatusText.Text = message;
+        if (DarkDialog.Confirm(
+            $"{message}\n\nWindows Explorer caches Win+X menu items. Would you like to restart Explorer now to apply the changes immediately?",
+            "Restart Windows Explorer?", DarkDialogKind.Question, this))
+        {
+            _contextManager.RestartExplorer();
+            ContextStatusText.Text = message + " Windows Explorer restarted.";
+            AppendLog("[ContextGuard] Restarted Windows Explorer.");
+        }
+    }
+
+    private void ContextBackup_Click(object sender, RoutedEventArgs e)
+    {
+        var entry = SelectedContextEntry;
+        if (entry is null)
+        {
+            DarkDialog.Show("Select an entry first.", "Nothing Selected", DarkDialogKind.Info, this);
+            return;
+        }
+
+        RunContextOperation(() =>
+        {
+            var backup = _contextManager.CreateBackup(entry);
+            ContextStatusText.Text = $"Backup created: {backup}";
+            AppendLog($"[ContextGuard] Manual backup created: {backup}");
+            DarkDialog.Show($"Backup created successfully:\n{backup}", "Backup Complete", DarkDialogKind.Success, this);
+        });
+    }
+
+    private void ContextRestore_Click(object sender, RoutedEventArgs e)
+    {
+        var initialDir = Directory.Exists(_contextManager.BackupDirectory)
+            ? _contextManager.BackupDirectory
+            : (Directory.Exists(_contextManager.LegacyBackupDirectory)
+                ? _contextManager.LegacyBackupDirectory
+                : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose a ContextGuard Backup",
+            Filter = "ContextGuard backups (*.json)|*.json|All files (*.*)|*.*",
+            InitialDirectory = initialDir
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        if (!DarkDialog.Confirm(
+            $"Restore the selected backup?\n\n{dialog.FileName}",
+            "Confirm Restore", DarkDialogKind.Warning, this))
+            return;
+
+        RunContextOperation(() =>
+        {
+            _contextManager.Restore(dialog.FileName);
+            _ = RefreshContextEntriesAsync();
+            var msg = $"Restored backup: {Path.GetFileName(dialog.FileName)}";
+            AppendLog($"[ContextGuard] {msg}");
+            PromptContextRestartExplorer(msg);
+        });
+    }
+
+    private void RunContextOperation(Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            DarkDialog.Show($"Windows denied access to this location. Ensure xSystemForge is running as administrator.\n\n{ex.Message}", "Access Denied", DarkDialogKind.Warning, this);
+        }
+        catch (System.Security.SecurityException ex)
+        {
+            DarkDialog.Show(ex.Message, "Security Error", DarkDialogKind.Error, this);
+        }
+        catch (Exception ex)
+        {
+            DarkDialog.Show(ex.Message, "Operation Failed", DarkDialogKind.Error, this);
+        }
     }
 }

@@ -226,7 +226,7 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="TabItem">
-            <Border x:Name="Bd" Cursor="Hand" Background="Transparent" BorderBrush="Transparent" BorderThickness="0,0,0,2" CornerRadius="6,6,0,0" Padding="14,9" Margin="0,0,4,0">
+            <Border x:Name="Bd" Cursor="Hand" Background="Transparent" BorderBrush="Transparent" BorderThickness="0,0,0,2" CornerRadius="6,6,0,0" Padding="11,9" Margin="0,0,2,0">
               <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
@@ -366,6 +366,59 @@
       <Setter Property="Background" Value="#1E2430"/>
       <Setter Property="Foreground" Value="#3B82F6"/>
       <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+
+    <!-- Dark Slider -->
+    <Style TargetType="Slider">
+      <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}"/>
+      <Setter Property="Background" Value="#252A36"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Slider">
+            <Grid VerticalAlignment="Center" MinHeight="20">
+              <Border Height="4" CornerRadius="2" Background="#252A36" VerticalAlignment="Center"/>
+              <Track x:Name="PART_Track">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Focusable="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="4" CornerRadius="2,0,0,2" Background="{StaticResource AccentHoverBrush}" VerticalAlignment="Center"/>
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Focusable="False">
+                    <RepeatButton.Template>
+                      <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="4" Background="Transparent" VerticalAlignment="Center"/>
+                      </ControlTemplate>
+                    </RepeatButton.Template>
+                  </RepeatButton>
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Width="14" Height="14">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Ellipse x:Name="thumbDot" Fill="#60A5FA" Stroke="#111318" StrokeThickness="1.5"/>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="thumbDot" Property="Fill" Value="#93C5FD"/>
+                          </Trigger>
+                          <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="thumbDot" Property="Fill" Value="#F8FAFC"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
   </Application.Resources>
 </Application>
