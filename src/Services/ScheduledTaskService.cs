@@ -21,16 +21,18 @@ public sealed class ScheduledTaskStatusInfo
 /// </summary>
 public sealed class ScheduledTaskService
 {
-    public const string TaskFolder = @"\xSecurityCenter\";
+    // NOTE: Must NOT be \xSecurityCenter\ - a root-level logon task named "xSecurityCenter" already exists,
+    // and Task Scheduler cannot create a folder with the same name as an existing task (0x80070003).
+    public const string TaskFolder = @"\xPrograms\xSecurityCenter\";
     public const string TaskName = "SilentDriverUpdates";
-    public const string FullTaskPath = @"\xSecurityCenter\SilentDriverUpdates";
+    public const string FullTaskPath = @"\xPrograms\xSecurityCenter\SilentDriverUpdates";
 
     public Task<ScheduledTaskStatusInfo> GetStatusAsync()
     {
         return Task.Run(() =>
         {
             var ps = @"
-$t = Get-ScheduledTask -TaskPath '\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
+$t = Get-ScheduledTask -TaskPath '\xPrograms\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
 if ($null -eq $t) {
     $t = Get-ScheduledTask -TaskPath '\xSystemForge\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
 }
@@ -110,11 +112,11 @@ Unregister-ScheduledTask -TaskPath '\xDriverUpdater\' -TaskName 'SilentDriverUpd
 Unregister-ScheduledTask -TaskPath '\xSystemForge\' -TaskName 'SilentDriverUpdates' -Confirm:$false -ErrorAction SilentlyContinue
 try {{
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Highest
-    Register-ScheduledTask -TaskPath '\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSecurityCenter silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
+    Register-ScheduledTask -TaskPath '\xPrograms\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSecurityCenter silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
     Write-Output 'Registered (Elevated S4U)'
 }} catch {{
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskPath '\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSecurityCenter silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
+    Register-ScheduledTask -TaskPath '\xPrograms\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSecurityCenter silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
     Write-Output 'Registered (Elevated Interactive)'
 }}
 ";
@@ -140,9 +142,15 @@ try {{
         {
             var ps = @"
 $ErrorActionPreference = 'Stop'
-$t = Get-ScheduledTask -TaskPath '\xDriverUpdater\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
-if ($null -ne $t) {
-    Unregister-ScheduledTask -TaskPath '\xDriverUpdater\' -TaskName 'SilentDriverUpdates' -Confirm:$false
+$removed = $false
+foreach ($p in '\xPrograms\xSecurityCenter\','\xSystemForge\','\xDriverUpdater\') {
+    $t = Get-ScheduledTask -TaskPath $p -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
+    if ($null -ne $t) {
+        Unregister-ScheduledTask -TaskPath $p -TaskName 'SilentDriverUpdates' -Confirm:$false
+        $removed = $true
+    }
+}
+if ($removed) {
     Write-Output 'Removed'
 } else {
     Write-Output 'NotFound'
@@ -170,7 +178,9 @@ if ($null -ne $t) {
         {
             var ps = @"
 $ErrorActionPreference = 'Stop'
-Start-ScheduledTask -TaskPath '\xDriverUpdater\' -TaskName 'SilentDriverUpdates'
+$p = '\xPrograms\xSecurityCenter\'
+if ($null -eq (Get-ScheduledTask -TaskPath $p -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue)) { $p = '\xSystemForge\' }
+Start-ScheduledTask -TaskPath $p -TaskName 'SilentDriverUpdates'
 Write-Output 'Started'";
             var (exit, output) = RunEncodedPowerShell(ps);
             var trimmed = output.Trim();
