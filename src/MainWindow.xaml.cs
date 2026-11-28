@@ -308,14 +308,15 @@ public partial class MainWindow : Window
     {
         if (_loadingSettings) return;
         bool want = ChkStartWithWindows.IsChecked == true;
-        bool ok = SecurityStartupManager.SetStartup(want);
-        AppendLog($"[Startup] Elevated logon task {(want ? "enabled" : "disabled")}: {(ok ? "OK" : "Failed")}");
+        var (ok, msg) = SecurityStartupManager.SetStartup(want);
+        AppendLog($"[Startup] {msg}");
+        StatusFooterText.Text = msg;
         if (!ok)
         {
             _loadingSettings = true;
             ChkStartWithWindows.IsChecked = SecurityStartupManager.IsStartupEnabled();
             _loadingSettings = false;
-            DarkDialog.Show("Could not update the Windows Task Scheduler logon entry. Ensure xSecurityCenter is running elevated.", "Startup Task", DarkDialogKind.Warning, this);
+            DarkDialog.Show($"Could not update the Windows Task Scheduler logon entry:\n\n{msg}", "Startup Task", DarkDialogKind.Warning, this);
         }
     }
 
@@ -2237,7 +2238,14 @@ public partial class MainWindow : Window
             _trayIconOrange = LoadTrayIcon(Path.Combine(assetsDir, "xsecurity-orange.ico"), Path.Combine(AppContext.BaseDirectory, "icon.ico"));
             _trayIconRed = LoadTrayIcon(Path.Combine(assetsDir, "xsecurity-red.ico"), Path.Combine(AppContext.BaseDirectory, "icon.ico"));
 
-            var menu = new System.Windows.Forms.ContextMenuStrip();
+            var menu = new System.Windows.Forms.ContextMenuStrip
+            {
+                BackColor = System.Drawing.Color.FromArgb(0x1A, 0x1A, 0x1E),
+                ForeColor = System.Drawing.Color.FromArgb(0xF4, 0xF4, 0xF5),
+                ShowImageMargin = false,
+                Font = new System.Drawing.Font("Segoe UI", 9.5f),
+                Renderer = new DarkTrayMenuRenderer()
+            };
             menu.Items.Add("Open xSecurityCenter", null, (_, _) => Dispatcher.Invoke(BringToForeground));
             menu.Items.Add("Run Offline Network Diagnostics", null, (_, _) => Dispatcher.Invoke(() =>
             {
@@ -2254,6 +2262,12 @@ public partial class MainWindow : Window
                 Close();
                 System.Windows.Application.Current.Shutdown();
             }));
+
+            foreach (System.Windows.Forms.ToolStripItem item in menu.Items)
+            {
+                item.BackColor = System.Drawing.Color.FromArgb(0x1A, 0x1A, 0x1E);
+                item.ForeColor = System.Drawing.Color.FromArgb(0xF4, 0xF4, 0xF5);
+            }
 
             _trayIcon = new System.Windows.Forms.NotifyIcon
             {
@@ -3142,5 +3156,41 @@ public partial class MainWindow : Window
         bool ok = SchedulerManager.RemoveSchedule(SchedulerManager.DefaultTaskName);
         RefreshScannerMetaUi();
         DarkDialog.Show(ok ? "Scheduled malware scan removed." : "No scheduled task found or removal failed.", "Scheduled Scan", ok ? DarkDialogKind.Info : DarkDialogKind.Warning, this);
+    }
+
+    private sealed class DarkTrayMenuRenderer : System.Windows.Forms.ToolStripProfessionalRenderer
+    {
+        public DarkTrayMenuRenderer() : base(new DarkTrayColorTable()) { }
+
+        protected override void OnRenderMenuItemBackground(System.Windows.Forms.ToolStripItemRenderEventArgs e)
+        {
+            var rect = new System.Drawing.Rectangle(4, 2, e.Item.Width - 8, e.Item.Height - 4);
+            var bg = e.Item.Selected
+                ? System.Drawing.Color.FromArgb(0x2B, 0x1B, 0x0E)
+                : System.Drawing.Color.FromArgb(0x1A, 0x1A, 0x1E);
+            using var brush = new System.Drawing.SolidBrush(bg);
+            e.Graphics.FillRectangle(brush, rect);
+            e.Item.ForeColor = e.Item.Selected
+                ? System.Drawing.Color.FromArgb(0xFA, 0xAD, 0x3F)
+                : System.Drawing.Color.FromArgb(0xF4, 0xF4, 0xF5);
+        }
+
+        protected override void OnRenderSeparator(System.Windows.Forms.ToolStripSeparatorRenderEventArgs e)
+        {
+            int y = e.Item.Height / 2;
+            using var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(0x2C, 0x2C, 0x33));
+            e.Graphics.DrawLine(pen, 8, y, e.Item.Width - 8, y);
+        }
+    }
+
+    private sealed class DarkTrayColorTable : System.Windows.Forms.ProfessionalColorTable
+    {
+        private static readonly System.Drawing.Color Bg = System.Drawing.Color.FromArgb(0x1A, 0x1A, 0x1E);
+        private static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(0x2C, 0x2C, 0x33);
+        public override System.Drawing.Color ToolStripDropDownBackground => Bg;
+        public override System.Drawing.Color MenuBorder => Border;
+        public override System.Drawing.Color ImageMarginGradientBegin => Bg;
+        public override System.Drawing.Color ImageMarginGradientMiddle => Bg;
+        public override System.Drawing.Color ImageMarginGradientEnd => Bg;
     }
 }
