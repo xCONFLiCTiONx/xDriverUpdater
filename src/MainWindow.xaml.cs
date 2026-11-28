@@ -27,6 +27,9 @@ public partial class MainWindow : Window
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    private const int DWMWA_BORDER_COLOR = 34;
+    private const int DWMWA_CAPTION_COLOR = 35;
+    private const int DWMWA_TEXT_COLOR = 36;
 
     private readonly ConfigStore _configStore = new();
     private readonly HardwareDriverInspector _inspector = new();
@@ -63,13 +66,27 @@ public partial class MainWindow : Window
     private List<HardeningCheckResult> _hardeningChecks = new();
 
     private System.Windows.Forms.NotifyIcon? _trayIcon;
+    private System.Drawing.Icon? _trayIconGreen;
+    private System.Drawing.Icon? _trayIconOrange;
+    private System.Drawing.Icon? _trayIconRed;
     private bool _isExplicitExit;
     private bool _trayNotifiedOnce;
     private bool _startMinimized;
+    private bool _initialCheckDone;
+    private bool _isResolvingIssue;
+    private long _activeMalwareThreats;
+    private string _primaryResolveAction = "";
     private bool? _lastOnlineState;
     private DateTime _lastPgAlertUtc = DateTime.MinValue;
     private PrivacyGuardStatus _lastPgStatus = new();
     private List<PhysicalDriveInfo> _physicalDrives = new();
+
+    private static readonly System.Windows.Media.Imaging.BitmapImage BrandGreenPng = new(new Uri("pack://application:,,,/xSecurityCenter;component/Assets/xsecurity-green.png"));
+    private static readonly System.Windows.Media.Imaging.BitmapImage BrandOrangePng = new(new Uri("pack://application:,,,/xSecurityCenter;component/Assets/xsecurity-orange.png"));
+    private static readonly System.Windows.Media.Imaging.BitmapImage BrandRedPng = new(new Uri("pack://application:,,,/xSecurityCenter;component/Assets/xsecurity-red.png"));
+    private static readonly System.Windows.Media.Imaging.BitmapImage WindowGreenIco = new(new Uri("pack://application:,,,/xSecurityCenter;component/Assets/xsecurity-green.ico"));
+    private static readonly System.Windows.Media.Imaging.BitmapImage WindowOrangeIco = new(new Uri("pack://application:,,,/xSecurityCenter;component/Assets/xsecurity-orange.ico"));
+    private static readonly System.Windows.Media.Imaging.BitmapImage WindowRedIco = new(new Uri("pack://application:,,,/xSecurityCenter;component/Assets/xsecurity-red.ico"));
 
     private AppSettings _settings = new();
     private SystemProfile _profile = new();
@@ -131,7 +148,13 @@ public partial class MainWindow : Window
         {
             var hwnd = new WindowInteropHelper(this).Handle;
             int dark = 1;
+            int captionColor = 0x00181515; // #151518 (COLORREF 0x00BBGGRR)
+            int textColor = 0x00F5F4F4;    // #F4F4F5
+            int borderColor = 0x00332C2C;  // #2C2C33
             DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+            DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ref captionColor, sizeof(int));
+            DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, ref textColor, sizeof(int));
+            DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref borderColor, sizeof(int));
         }
         catch { }
     }
@@ -231,6 +254,9 @@ public partial class MainWindow : Window
             RefreshContextEntriesAsync(),
             RefreshDrivesAsync(fromBackground: false),
             RunBackgroundWatchdogTickAsync(initial: true));
+
+        _initialCheckDone = true;
+        UpdateDrawerOverallHealth();
     }
 
     private void ApplySettingsToUi()
@@ -275,6 +301,7 @@ public partial class MainWindow : Window
         _settings.BackupDriverBeforeInstall = ChkAutoBackup.IsChecked == true;
         _settings.EnableLocalToastOnFailure = ChkLocalToastOnFailure.IsChecked == true;
         _configStore.Save(_settings);
+        UpdateDrawerOverallHealth();
     }
 
     private void SecurityStartupCheck_Changed(object sender, RoutedEventArgs e)
@@ -314,6 +341,7 @@ public partial class MainWindow : Window
         StatusFooterText.Text = status;
         MainProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         MainProgressBar.IsIndeterminate = indeterminate;
+        UpdateDrawerOverallHealth();
     }
 
     private void AppendLog(string message)
@@ -1175,6 +1203,7 @@ public partial class MainWindow : Window
             : XSecurityUrlBox.Text.Trim();
         _settings.EnableLocalToastOnFailure = ChkLocalToastOnFailure.IsChecked == true;
         _configStore.Save(_settings);
+        UpdateDrawerOverallHealth();
     }
 
     private async void RegisterTaskBtn_Click(object sender, RoutedEventArgs e)
@@ -2203,12 +2232,10 @@ public partial class MainWindow : Window
     {
         try
         {
-            System.Drawing.Icon? icon = null;
-            var iconFile = Path.Combine(AppContext.BaseDirectory, "icon.ico");
-            if (File.Exists(iconFile))
-                icon = new System.Drawing.Icon(iconFile);
-            else
-                icon = System.Drawing.SystemIcons.Shield;
+            var assetsDir = Path.Combine(AppContext.BaseDirectory, "Assets");
+            _trayIconGreen = LoadTrayIcon(Path.Combine(assetsDir, "xsecurity-green.ico"), Path.Combine(AppContext.BaseDirectory, "icon.ico"));
+            _trayIconOrange = LoadTrayIcon(Path.Combine(assetsDir, "xsecurity-orange.ico"), Path.Combine(AppContext.BaseDirectory, "icon.ico"));
+            _trayIconRed = LoadTrayIcon(Path.Combine(assetsDir, "xsecurity-red.ico"), Path.Combine(AppContext.BaseDirectory, "icon.ico"));
 
             var menu = new System.Windows.Forms.ContextMenuStrip();
             menu.Items.Add("Open xSecurityCenter", null, (_, _) => Dispatcher.Invoke(BringToForeground));
@@ -2230,14 +2257,21 @@ public partial class MainWindow : Window
 
             _trayIcon = new System.Windows.Forms.NotifyIcon
             {
-                Icon = icon,
-                Text = "xSecurityCenter — Background Security Center",
+                Icon = _trayIconOrange ?? _trayIconGreen ?? System.Drawing.SystemIcons.Shield,
+                Text = "xSecurityCenter — Starting up...",
                 Visible = true,
                 ContextMenuStrip = menu
             };
             _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(BringToForeground);
         }
         catch { }
+    }
+
+    private static System.Drawing.Icon LoadTrayIcon(string primaryPath, string fallbackPath)
+    {
+        if (File.Exists(primaryPath)) return new System.Drawing.Icon(primaryPath);
+        if (File.Exists(fallbackPath)) return new System.Drawing.Icon(fallbackPath);
+        return System.Drawing.SystemIcons.Shield;
     }
 
     private void DisposeTrayIcon()
@@ -2250,6 +2284,9 @@ public partial class MainWindow : Window
                 _trayIcon.Dispose();
                 _trayIcon = null;
             }
+            _trayIconGreen?.Dispose();
+            _trayIconOrange?.Dispose();
+            _trayIconRed?.Dispose();
         }
         catch { }
     }
@@ -2342,20 +2379,184 @@ public partial class MainWindow : Window
 
     private void UpdateDrawerOverallHealth()
     {
-        var bc = new System.Windows.Media.BrushConverter();
-        bool pgIssue = _settings.MonitorPrivacyGuard && !_lastPgStatus.IsProcessRunning;
-        bool netIssue = _lastOnlineState == false;
-        bool driveIssue = _physicalDrives.Any(d => d.Prediction.Severity >= FailureSeverity.Warning30Days);
-
-        if (pgIssue || netIssue || driveIssue)
+        if (!Dispatcher.CheckAccess())
         {
+            Dispatcher.BeginInvoke(UpdateDrawerOverallHealth);
+            return;
+        }
+
+        var bc = new System.Windows.Media.BrushConverter();
+        var issues = new List<string>();
+        _primaryResolveAction = "";
+
+        bool pgStopped = _settings.MonitorPrivacyGuard && !_lastPgStatus.IsProcessRunning;
+        bool pgDisconnected = _settings.MonitorPrivacyGuard && _lastPgStatus.IsProcessRunning && !_lastPgStatus.IsTunnelUp;
+        bool netOffline = _lastOnlineState == false;
+        var failingDrives = _physicalDrives.Where(d => !d.IsVirtualDisk && d.Prediction.Severity >= FailureSeverity.Warning30Days).ToList();
+        var hotDrives = _physicalDrives.Where(d => !d.IsVirtualDisk && d.TemperatureC.HasValue && d.TemperatureC.Value >= _settings.DriveTempWarningThresholdC).ToList();
+
+        if (pgStopped)
+        {
+            issues.Add("xPrivacyGuard is NOT running.");
+            if (string.IsNullOrEmpty(_primaryResolveAction)) _primaryResolveAction = "launch_pg";
+        }
+        else if (pgDisconnected)
+        {
+            issues.Add("xPrivacyGuard is running, but its VPN tunnel is disconnected.");
+            if (string.IsNullOrEmpty(_primaryResolveAction)) _primaryResolveAction = "launch_pg";
+        }
+
+        if (netOffline)
+        {
+            issues.Add("Internet / network appears OFFLINE.");
+            if (string.IsNullOrEmpty(_primaryResolveAction)) _primaryResolveAction = "net_diag";
+        }
+
+        if (failingDrives.Count > 0)
+        {
+            issues.Add($"{failingDrives.Count} drive(s) predicted failing ({string.Join(", ", failingDrives.Select(d => d.Model))}).");
+            if (string.IsNullOrEmpty(_primaryResolveAction)) _primaryResolveAction = "open_drives";
+        }
+        else if (hotDrives.Count > 0)
+        {
+            issues.Add($"Drive temperature alert: {hotDrives[0].Model} at {hotDrives[0].TemperatureC}°C.");
+            if (string.IsNullOrEmpty(_primaryResolveAction)) _primaryResolveAction = "open_drives";
+        }
+
+        if (_activeMalwareThreats > 0)
+        {
+            issues.Add($"{_activeMalwareThreats} malware threat(s) detected in recent scan.");
+            if (string.IsNullOrEmpty(_primaryResolveAction)) _primaryResolveAction = "open_quarantine";
+        }
+
+        bool isWorking = !_initialCheckDone || _isBusy || _isMalwareScanning || _isResolvingIssue;
+
+        if (isWorking)
+        {
+            // ORANGE: Starting up / Scanning / Resolving
+            BrandIconImage.Source = BrandOrangePng;
+            BrandIconBorder.BorderBrush = (System.Windows.Media.Brush)bc.ConvertFromString("#8CF38020")!;
+            Icon = WindowOrangeIco;
+            if (_trayIcon != null && _trayIconOrange != null)
+            {
+                _trayIcon.Icon = _trayIconOrange;
+                _trayIcon.Text = !_initialCheckDone
+                    ? "xSecurityCenter — Starting up..."
+                    : "xSecurityCenter — Working / Resolving...";
+            }
+            DrawerStatusDot.Fill = (System.Windows.Media.Brush)bc.ConvertFromString("#F38020")!;
+            DrawerStatusText.Text = !_initialCheckDone ? "Starting..." : "Resolving...";
+
+            IssuesBanner.Visibility = Visibility.Visible;
+            IssuesBanner.Background = (System.Windows.Media.Brush)bc.ConvertFromString("#2B1B0E")!;
+            IssuesBanner.BorderBrush = (System.Windows.Media.Brush)bc.ConvertFromString("#F38020")!;
+            IssuesBannerTitle.Text = !_initialCheckDone ? "STARTING UP — CHECKING SECURITY POSTURE" : "ACTIVE OPERATION IN PROGRESS";
+            IssuesBannerTitle.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString("#FAAD3F")!;
+            IssuesBannerDetail.Text = issues.Count > 0
+                ? string.Join("  •  ", issues)
+                : "Running security checks and background telemetry...";
+            BtnResolvePrimary.Visibility = Visibility.Collapsed;
+        }
+        else if (issues.Count > 0)
+        {
+            // RED: Unresolved issue(s)
+            BrandIconImage.Source = BrandRedPng;
+            BrandIconBorder.BorderBrush = (System.Windows.Media.Brush)bc.ConvertFromString("#8CEF4444")!;
+            Icon = WindowRedIco;
+            if (_trayIcon != null && _trayIconRed != null)
+            {
+                _trayIcon.Icon = _trayIconRed;
+                var tip = $"xSecurityCenter — Issue: {issues[0]}";
+                _trayIcon.Text = tip.Length > 63 ? tip[..63] : tip;
+            }
             DrawerStatusDot.Fill = (System.Windows.Media.Brush)bc.ConvertFromString("#EF4444")!;
-            DrawerStatusText.Text = "Attention";
+            DrawerStatusText.Text = "Issue Detected";
+
+            IssuesBanner.Visibility = Visibility.Visible;
+            IssuesBanner.Background = (System.Windows.Media.Brush)bc.ConvertFromString("#331417")!;
+            IssuesBanner.BorderBrush = (System.Windows.Media.Brush)bc.ConvertFromString("#EF4444")!;
+            IssuesBannerTitle.Text = $"{issues.Count} UNRESOLVED SECURITY {(issues.Count == 1 ? "ISSUE" : "ISSUES")} — ACTION NEEDED";
+            IssuesBannerTitle.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString("#F87171")!;
+            IssuesBannerDetail.Text = string.Join("\n", issues.Select(i => "• " + i));
+
+            BtnResolvePrimary.Visibility = Visibility.Visible;
+            BtnResolvePrimary.Content = _primaryResolveAction switch
+            {
+                "launch_pg" => pgStopped ? "Launch xPrivacyGuard" : "Open xPrivacyGuard",
+                "net_diag" => "Run Offline Diagnostics",
+                "open_drives" => "Open Drive Sentinel",
+                "open_quarantine" => "Open Quarantine",
+                _ => "Resolve"
+            };
         }
         else
         {
+            // GREEN: All Good!
+            BrandIconImage.Source = BrandGreenPng;
+            BrandIconBorder.BorderBrush = (System.Windows.Media.Brush)bc.ConvertFromString("#8C22C55E")!;
+            Icon = WindowGreenIco;
+            if (_trayIcon != null && _trayIconGreen != null)
+            {
+                _trayIcon.Icon = _trayIconGreen;
+                _trayIcon.Text = "xSecurityCenter — All Systems Protected (Green)";
+            }
             DrawerStatusDot.Fill = (System.Windows.Media.Brush)bc.ConvertFromString("#22C55E")!;
-            DrawerStatusText.Text = "Protected";
+            DrawerStatusText.Text = "All Green";
+
+            IssuesBanner.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async void BtnResolvePrimary_Click(object sender, RoutedEventArgs e)
+    {
+        _isResolvingIssue = true;
+        UpdateDrawerOverallHealth();
+        try
+        {
+            switch (_primaryResolveAction)
+            {
+                case "launch_pg":
+                    var (ok, msg) = _pgMonitor.LaunchPrivacyGuard(_settings.PrivacyGuardExePath);
+                    AppendLog($"[Resolve] {msg}");
+                    if (!ok) DarkDialog.Show(msg, "Launch xPrivacyGuard", DarkDialogKind.Warning, this);
+                    await Task.Delay(1800);
+                    await RunBackgroundWatchdogTickAsync();
+                    break;
+                case "net_diag":
+                    NavNetwork.IsChecked = true;
+                    await RunNetworkDiagnosticsAsync();
+                    break;
+                case "open_drives":
+                    NavDrives.IsChecked = true;
+                    await RefreshDrivesAsync(fromBackground: false);
+                    break;
+                case "open_quarantine":
+                    NavScanner.IsChecked = true;
+                    ScannerView.SelectedIndex = 2;
+                    _activeMalwareThreats = 0;
+                    RefreshScannerMetaUi();
+                    break;
+            }
+        }
+        finally
+        {
+            _isResolvingIssue = false;
+            UpdateDrawerOverallHealth();
+        }
+    }
+
+    private async void BtnRecheckAll_Click(object sender, RoutedEventArgs e)
+    {
+        _isResolvingIssue = true;
+        UpdateDrawerOverallHealth();
+        try
+        {
+            await Task.WhenAll(RunBackgroundWatchdogTickAsync(), RefreshDrivesAsync(fromBackground: false));
+        }
+        finally
+        {
+            _isResolvingIssue = false;
+            UpdateDrawerOverallHealth();
         }
     }
 
@@ -2701,6 +2902,7 @@ public partial class MainWindow : Window
         ScanStatusText.Text = "SCANNING";
         ScanStatusText.Foreground = (System.Windows.Media.Brush)FindResource("AccentBright");
         ScanProgressBar.IsIndeterminate = true;
+        UpdateDrawerOverallHealth();
         LogScanner($"[INFO] Starting {(fullScan ? "Full System" : "Basic")} Scan...");
 
         try
@@ -2731,6 +2933,7 @@ public partial class MainWindow : Window
                         }
                         if (p.IsCompleted)
                         {
+                            _activeMalwareThreats = p.ThreatsDetected;
                             ScanProgressBar.IsIndeterminate = false;
                             ScanProgressBar.Value = ScanProgressBar.Maximum > 0 ? ScanProgressBar.Maximum : 100;
                             ScanStatusText.Text = p.ThreatsDetected > 0 ? "THREATS" : "CLEAN";
@@ -2775,6 +2978,7 @@ public partial class MainWindow : Window
             BtnStopScan.IsEnabled = false;
             ScanProgressBar.IsIndeterminate = false;
             RefreshScannerMetaUi();
+            UpdateDrawerOverallHealth();
         }
     }
 

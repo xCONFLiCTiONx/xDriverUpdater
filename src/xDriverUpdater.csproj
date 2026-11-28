@@ -28,7 +28,16 @@
 
   <ItemGroup>
     <Resource Include="icon.ico" />
+    <Resource Include="Assets\xsecurity-green.png" />
+    <Resource Include="Assets\xsecurity-orange.png" />
+    <Resource Include="Assets\xsecurity-red.png" />
+    <Resource Include="Assets\xsecurity-green.ico" />
+    <Resource Include="Assets\xsecurity-orange.ico" />
+    <Resource Include="Assets\xsecurity-red.ico" />
     <None Update="icon.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Assets\*.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

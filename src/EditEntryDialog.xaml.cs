@@ -143,7 +143,13 @@ public partial class EditEntryDialog : Window
         {
             var hwnd = new WindowInteropHelper(this).Handle;
             int dark = 1;
+            int captionColor = 0x00181515; // #151518
+            int textColor = 0x00F5F4F4;    // #F4F4F5
+            int borderColor = 0x00332C2C;  // #2C2C33
             DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+            DwmSetWindowAttribute(hwnd, 35, ref captionColor, sizeof(int));
+            DwmSetWindowAttribute(hwnd, 36, ref textColor, sizeof(int));
+            DwmSetWindowAttribute(hwnd, 34, ref borderColor, sizeof(int));
         }
         catch { }
     }
