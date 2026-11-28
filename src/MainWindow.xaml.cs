@@ -73,6 +73,7 @@ public partial class MainWindow : Window
     private bool _trayNotifiedOnce;
     private bool _startMinimized;
     private bool _initialCheckDone;
+    private bool _startupInitStarted;
     private bool _isResolvingIssue;
     private long _activeMalwareThreats;
     private string _primaryResolveAction = "";
@@ -205,11 +206,7 @@ public partial class MainWindow : Window
             _monitorTimer.Stop();
             ShowInTaskbar = false;
             Hide();
-            if (!_trayNotifiedOnce)
-            {
-                _trayNotifiedOnce = true;
-                ShowTrayBalloon("xSecurityCenter Active", "Staying running in the system tray to monitor xPrivacyGuard, network health, and drives.", System.Windows.Forms.ToolTipIcon.Info);
-            }
+            _trayNotifiedOnce = true; // no toast when sent to tray
             return;
         }
 
@@ -235,8 +232,16 @@ public partial class MainWindow : Window
         catch { }
     }
 
-    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e) => await RunStartupInitAsync();
+
+    /// <summary>
+    /// Runs the initial checks once. Called from Loaded, or directly by App when starting hidden
+    /// in the tray (a never-shown window does not raise Loaded).
+    /// </summary>
+    public async Task RunStartupInitAsync()
     {
+        if (_startupInitStarted) return;
+        _startupInitStarted = true;
         ApplySettingsToUi();
         ReposGrid.ItemsSource = _settings.Repositories;
         RepoPresetCombo.ItemsSource = RepositoryManagerService.GetPublicRepositoryPresets().Select(p => p.Name).ToList();
@@ -2335,7 +2340,7 @@ public partial class MainWindow : Window
             {
                 _lastPgAlertUtc = DateTime.UtcNow;
                 AppendLog("[Watchdog] WARNING: xPrivacyGuard is NOT running!");
-                ShowTrayBalloon("xPrivacyGuard Stopped", "xPrivacyGuard is not running. Open xSecurityCenter to relaunch it.", System.Windows.Forms.ToolTipIcon.Warning);
+                if (!initial) ShowTrayBalloon("xPrivacyGuard Stopped", "xPrivacyGuard is not running. Open xSecurityCenter to relaunch it.", System.Windows.Forms.ToolTipIcon.Warning);
             }
 
             if (_lastOnlineState == true && !isOnline && _settings.AutoRunNetworkDiagnosticsOnOffline)

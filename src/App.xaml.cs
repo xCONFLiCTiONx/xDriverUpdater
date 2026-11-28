@@ -85,6 +85,8 @@ public partial class App : System.Windows.Application
         {
             win.ShowInTaskbar = false;
             win.Visibility = Visibility.Hidden;
+            // Hidden window never raises Loaded; kick off initial checks so the tray goes green.
+            _ = win.RunStartupInitAsync();
         }
     }
 
