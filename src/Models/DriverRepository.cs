@@ -76,4 +76,17 @@ public sealed class AppSettings
     public Guid? PowerPlanManagedSchemeGuid { get; set; }
     public PowerPlanConfig? PowerPlanLastConfig { get; set; }
     public DateTime? PowerPlanLastAppliedUtc { get; set; }
+
+    // xSecurityCenter Background, PrivacyGuard Watchdog, Drive Sentinel & Network Static IP settings
+    public bool MinimizeToTrayOnClose { get; set; } = true;
+    public bool MonitorPrivacyGuard { get; set; } = true;
+    public string PrivacyGuardExePath { get; set; } = "";
+    public int DriveTempWarningThresholdC { get; set; } = 65;
+    public bool AutoRunNetworkDiagnosticsOnOffline { get; set; } = true;
+    public string StaticEthIp { get; set; } = "192.168.1.250";
+    public string StaticWifiIp { get; set; } = "192.168.1.251";
+    public string StaticSubnetMask { get; set; } = "255.255.255.0";
+    public string StaticGateway { get; set; } = "192.168.1.1";
+    public string StaticPrimaryDns { get; set; } = "1.1.1.1";
+    public string StaticSecondaryDns { get; set; } = "8.8.8.8";
 }

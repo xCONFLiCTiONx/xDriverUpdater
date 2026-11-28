@@ -29,13 +29,13 @@ public sealed class DarkDialog : Window
     private DarkDialog(string title, string message, DarkDialogKind kind, bool isConfirm, Window? owner)
     {
         Title = title;
-        Background = new SolidColorBrush(Color.FromRgb(0x11, 0x13, 0x18));
-        Foreground = new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF6));
+        Background = new SolidColorBrush(Color.FromRgb(0x12, 0x12, 0x14));
+        Foreground = new SolidColorBrush(Color.FromRgb(0xF4, 0xF4, 0xF5));
         FontFamily = new FontFamily("Segoe UI");
         FontSize = 13;
-        Width = 460;
+        Width = 480;
         MinWidth = 360;
-        MaxWidth = 560;
+        MaxWidth = 580;
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;
         ShowInTaskbar = false;
@@ -45,11 +45,11 @@ public sealed class DarkDialog : Window
 
         var (badgeText, badgeHex) = kind switch
         {
-            DarkDialogKind.Success => ("OK", "#15803D"),
-            DarkDialogKind.Warning => ("WARN", "#D97706"),
-            DarkDialogKind.Error => ("ERR", "#B91C1C"),
-            DarkDialogKind.Question => ("CONFIRM", "#315AA5"),
-            _ => ("INFO", "#2563EB")
+            DarkDialogKind.Success => ("OK", "#22C55E"),
+            DarkDialogKind.Warning => ("WARN", "#F38020"),
+            DarkDialogKind.Error => ("ERR", "#EF4444"),
+            DarkDialogKind.Question => ("CONFIRM", "#F38020"),
+            _ => ("INFO", "#FAAD3F")
         };
 
         var root = new Grid { Margin = new Thickness(18) };
@@ -102,10 +102,10 @@ public sealed class DarkDialog : Window
         };
         var bodyCard = new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(0x19, 0x1C, 0x23)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(0x2C, 0x32, 0x40)),
+            Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1E)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x2C, 0x2C, 0x33)),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(10),
             Padding = new Thickness(12),
             Margin = new Thickness(0, 0, 0, 16),
             Child = bodyScroll
@@ -175,15 +175,15 @@ public sealed class DarkDialog : Window
         catch { }
     }
 
-    public static void Show(string message, string title = "xDriverUpdater", DarkDialogKind kind = DarkDialogKind.Info, Window? owner = null)
+    public static void Show(string message, string title = "xSecurityCenter", DarkDialogKind kind = DarkDialogKind.Info, Window? owner = null)
     {
-        var dlg = new DarkDialog(title, message, kind, isConfirm: false, owner ?? Application.Current?.MainWindow);
+        var dlg = new DarkDialog(title, message, kind, isConfirm: false, owner ?? System.Windows.Application.Current?.MainWindow);
         dlg.ShowDialog();
     }
 
     public static bool Confirm(string message, string title = "Confirm", DarkDialogKind kind = DarkDialogKind.Question, Window? owner = null)
     {
-        var dlg = new DarkDialog(title, message, kind, isConfirm: true, owner ?? Application.Current?.MainWindow);
+        var dlg = new DarkDialog(title, message, kind, isConfirm: true, owner ?? System.Windows.Application.Current?.MainWindow);
         dlg.ShowDialog();
         return dlg._result;
     }

@@ -3,16 +3,22 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>xDriverUpdater</RootNamespace>
-    <AssemblyName>xSystemForge</AssemblyName>
-    <Version>2.2.0</Version>
+    <AssemblyName>xSecurityCenter</AssemblyName>
+    <Version>3.0.0</Version>
     <Authors>Michael</Authors>
-    <Description>xSystemForge — All-in-One Windows Driver, Telemetry, Power Plan &amp; Context Menu Suite</Description>
+    <Description>xSecurityCenter — All-in-One Windows Security, Privacy, Network, Drive, Driver, Power &amp; System Suite</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>icon.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="8.0.0" />

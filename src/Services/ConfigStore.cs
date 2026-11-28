@@ -20,19 +20,26 @@ public sealed class ConfigStore
         var baseDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "xPrograms");
-        ConfigDir = Path.Combine(baseDir, "xSystemForge");
+        ConfigDir = Path.Combine(baseDir, "xSecurityCenter");
         ConfigPath = Path.Combine(ConfigDir, "settings.json");
 
-        // Seamlessly migrate settings from legacy xDriverUpdater folder on first launch
-        var legacyPath = Path.Combine(baseDir, "xDriverUpdater", "settings.json");
-        if (!File.Exists(ConfigPath) && File.Exists(legacyPath))
+        // Seamlessly migrate settings from legacy xSystemForge or xDriverUpdater folders on first launch
+        if (!File.Exists(ConfigPath))
         {
-            try
+            foreach (var legacyFolder in new[] { "xSystemForge", "xDriverUpdater" })
             {
-                Directory.CreateDirectory(ConfigDir);
-                File.Copy(legacyPath, ConfigPath, overwrite: false);
+                var legacyPath = Path.Combine(baseDir, legacyFolder, "settings.json");
+                if (File.Exists(legacyPath))
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(ConfigDir);
+                        File.Copy(legacyPath, ConfigPath, overwrite: false);
+                        break;
+                    }
+                    catch { }
+                }
             }
-            catch { }
         }
     }
 

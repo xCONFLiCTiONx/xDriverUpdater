@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds the standalone Inno Setup 6 installer (xSystemForge-Setup.exe) for xSystemForge v2.2.0.
+    Builds the standalone Inno Setup 6 installer (xSecurityCenter-Setup.exe) for xSecurityCenter v3.0.0.
 #>
 [CmdletBinding()]
 param(
@@ -18,13 +18,13 @@ $repoRoot      = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = $repoRoot
 }
-$folderName    = "xSystemForge"
-$appName       = "xSystemForge"
-$installerBase = "xSystemForge-Setup"
-$exeName       = "xSystemForge.exe"
-$version       = "2.2.0"
+$folderName    = "xSecurityCenter"
+$appName       = "xSecurityCenter"
+$installerBase = "xSecurityCenter-Setup"
+$exeName       = "xSecurityCenter.exe"
+$version       = "3.0.0"
 $appId         = "E7C3A914-5B2D-4F8A-9C1E-6D4B8A2F7E05"
-$description   = "All-in-One Windows Driver, Telemetry, Power Plan and Context Menu Suite"
+$description   = "All-in-One Windows Security, Privacy, Network, Drive, Driver, Power Plan and Context Menu Suite"
 $installDir    = Join-Path $env:LOCALAPPDATA "xPrograms\$folderName"
 $sourceDir     = Join-Path $repoRoot "src\bin\Release\net8.0-windows"
 $repoIcon      = Join-Path $repoRoot "src\icon.ico"

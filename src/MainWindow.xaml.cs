@@ -42,6 +42,19 @@ public partial class MainWindow : Window
     private readonly ContextMenuScanner _contextScanner = new();
     private readonly ContextMenuManager _contextManager = new();
     private readonly ObservableCollection<MenuEntry> _contextEntries = [];
+    private readonly PrivacyGuardMonitorService _pgMonitor = new();
+    private readonly NetworkDiagnosticsService _netDiag = new();
+    private readonly DispatcherTimer _watchdogTimer = new() { Interval = TimeSpan.FromSeconds(20) };
+    private readonly DispatcherTimer _driveTimer = new() { Interval = TimeSpan.FromMinutes(15) };
+
+    private System.Windows.Forms.NotifyIcon? _trayIcon;
+    private bool _isExplicitExit;
+    private bool _trayNotifiedOnce;
+    private bool _startMinimized;
+    private bool? _lastOnlineState;
+    private DateTime _lastPgAlertUtc = DateTime.MinValue;
+    private PrivacyGuardStatus _lastPgStatus = new();
+    private List<PhysicalDriveInfo> _physicalDrives = new();
 
     private AppSettings _settings = new();
     private SystemProfile _profile = new();
@@ -61,8 +74,11 @@ public partial class MainWindow : Window
     private bool _loadingSettings;
     private bool _isBusy;
 
-    public MainWindow()
+    private string NetworkRollbackPath => Path.Combine(_configStore.ConfigDir, "network-rollback.json");
+
+    public MainWindow(bool startMinimized = false)
     {
+        _startMinimized = startMinimized;
         _suppressPowerUiEvents = true;
         _settings = _configStore.Load();
         _powerInspector = new PowerHardwareInspector(_powerCfg);
@@ -70,9 +86,24 @@ public partial class MainWindow : Window
         InitializeComponent();
         ContextEntriesGrid.ItemsSource = _contextEntries;
         RestoreWindowPlacement();
+        InitializeTrayIcon();
         _monitorTimer.Tick += async (_, _) => await RefreshLiveMonitorAsync();
+        _watchdogTimer.Tick += async (_, _) => await RunBackgroundWatchdogTickAsync();
+        _driveTimer.Tick += async (_, _) => await RefreshDrivesAsync(fromBackground: true);
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
+    }
+
+    public void BringToForeground()
+    {
+        ShowInTaskbar = true;
+        Show();
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -126,7 +157,29 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
+        SaveWindowPlacement();
+        if (!_isExplicitExit && _settings.MinimizeToTrayOnClose)
+        {
+            e.Cancel = true;
+            _monitorTimer.Stop();
+            ShowInTaskbar = false;
+            Hide();
+            if (!_trayNotifiedOnce)
+            {
+                _trayNotifiedOnce = true;
+                ShowTrayBalloon("xSecurityCenter Active", "Staying running in the system tray to monitor xPrivacyGuard, network health, and drives.", System.Windows.Forms.ToolTipIcon.Info);
+            }
+            return;
+        }
+
         _monitorTimer.Stop();
+        _watchdogTimer.Stop();
+        _driveTimer.Stop();
+        DisposeTrayIcon();
+    }
+
+    private void SaveWindowPlacement()
+    {
         try
         {
             var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
@@ -146,17 +199,27 @@ public partial class MainWindow : Window
         ReposGrid.ItemsSource = _settings.Repositories;
         RepoPresetCombo.ItemsSource = RepositoryManagerService.GetPublicRepositoryPresets().Select(p => p.Name).ToList();
         if (RepoPresetCombo.Items.Count > 0) RepoPresetCombo.SelectedIndex = 0;
+
+        _watchdogTimer.Start();
+        _driveTimer.Start();
+
         await Task.WhenAll(
             RefreshHardwareAndStoreAsync(),
             RefreshScheduledTaskStatusAsync(),
             RefreshTelemetryAsync(),
             RefreshPowerPlanAsync(initialLoad: true),
-            RefreshContextEntriesAsync());
+            RefreshContextEntriesAsync(),
+            RefreshDrivesAsync(fromBackground: false),
+            RunBackgroundWatchdogTickAsync(initial: true));
     }
 
     private void ApplySettingsToUi()
     {
         _loadingSettings = true;
+        ChkStartWithWindows.IsChecked = SecurityStartupManager.IsStartupEnabled();
+        ChkMinimizeToTray.IsChecked = _settings.MinimizeToTrayOnClose;
+        ChkMonitorPrivacyGuard.IsChecked = _settings.MonitorPrivacyGuard;
+        ChkAutoNetDiag.IsChecked = _settings.AutoRunNetworkDiagnosticsOnOffline;
         ChkUseWua.IsChecked = _settings.IncludeWindowsUpdateChannel;
         ChkUseDirect.IsChecked = _settings.IncludeDirectManufacturerChecks;
         ChkUseRepos.IsChecked = _settings.IncludeCustomRepositories;
@@ -167,12 +230,23 @@ public partial class MainWindow : Window
         SchedTimeBox.Text = _settings.ScheduledTaskTime;
         XSecurityUrlBox.Text = _settings.XSecurityEndpointUrl;
         SchedFreqCombo.SelectedIndex = string.Equals(_settings.ScheduledTaskFrequency, "Weekly", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+
+        StaticEthIpBox.Text = _settings.StaticEthIp;
+        StaticWifiIpBox.Text = _settings.StaticWifiIp;
+        StaticSubnetBox.Text = _settings.StaticSubnetMask;
+        StaticGatewayBox.Text = _settings.StaticGateway;
+        StaticPrimaryDnsBox.Text = _settings.StaticPrimaryDns;
+        StaticSecondaryDnsBox.Text = _settings.StaticSecondaryDns;
+        UpdateStaticRollbackUi();
         _loadingSettings = false;
     }
 
     private void SettingCheck_Changed(object sender, RoutedEventArgs e)
     {
         if (_loadingSettings) return;
+        _settings.MinimizeToTrayOnClose = ChkMinimizeToTray.IsChecked == true;
+        _settings.MonitorPrivacyGuard = ChkMonitorPrivacyGuard.IsChecked == true;
+        _settings.AutoRunNetworkDiagnosticsOnOffline = ChkAutoNetDiag.IsChecked == true;
         _settings.IncludeWindowsUpdateChannel = ChkUseWua.IsChecked == true;
         _settings.IncludeDirectManufacturerChecks = ChkUseDirect.IsChecked == true;
         _settings.IncludeCustomRepositories = ChkUseRepos.IsChecked == true;
@@ -181,6 +255,21 @@ public partial class MainWindow : Window
         _settings.BackupDriverBeforeInstall = ChkAutoBackup.IsChecked == true;
         _settings.EnableLocalToastOnFailure = ChkLocalToastOnFailure.IsChecked == true;
         _configStore.Save(_settings);
+    }
+
+    private void SecurityStartupCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings) return;
+        bool want = ChkStartWithWindows.IsChecked == true;
+        bool ok = SecurityStartupManager.SetStartup(want);
+        AppendLog($"[Startup] Elevated logon task {(want ? "enabled" : "disabled")}: {(ok ? "OK" : "Failed")}");
+        if (!ok)
+        {
+            _loadingSettings = true;
+            ChkStartWithWindows.IsChecked = SecurityStartupManager.IsStartupEnabled();
+            _loadingSettings = false;
+            DarkDialog.Show("Could not update the Windows Task Scheduler logon entry. Ensure xSecurityCenter is running elevated.", "Startup Task", DarkDialogKind.Warning, this);
+        }
     }
 
     private void SetBusy(bool busy, string status, bool indeterminate = true)
@@ -333,7 +422,8 @@ public partial class MainWindow : Window
             int newCount = _updateGroups.Count(g => g.HasNewerVersion);
             SetBusy(false, $"Scan complete: {newCount} device(s) have newer drivers ({_allUpdates.Count} total versions available to choose from).");
             if (_updateGroups.Count > 0)
-                MainTabs.SelectedIndex = 1;
+                NavDrivers.IsChecked = true;
+            DriversSubTabs.SelectedIndex = 0;
         }
         catch (Exception ex)
         {
@@ -1133,11 +1223,38 @@ public partial class MainWindow : Window
 
     // ==================== TELEMETRY, DEBLOAT & LIVE OUTBOUND MONITOR ====================
 
-    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    // ==================== NAVIGATION DRAWER ====================
+
+    private void Nav_Checked(object sender, RoutedEventArgs e)
     {
-        if (e.Source != MainTabs) return;
-        bool onMonitor = MainTabs.SelectedItem == LiveMonitorTabItem;
-        if (onMonitor && !_monitorPaused)
+        if (!IsLoaded || sender is not RadioButton rb || rb.Tag is not string tag) return;
+        SwitchView(tag);
+    }
+
+    private void SwitchView(string tag)
+    {
+        DashboardView.Visibility = tag == "Dashboard" ? Visibility.Visible : Visibility.Collapsed;
+        NetworkView.Visibility = tag == "Network" ? Visibility.Visible : Visibility.Collapsed;
+        DrivesView.Visibility = tag == "Drives" ? Visibility.Visible : Visibility.Collapsed;
+        DriversSubTabs.Visibility = tag == "Drivers" ? Visibility.Visible : Visibility.Collapsed;
+        TelemetryView.Visibility = tag == "Telemetry" ? Visibility.Visible : Visibility.Collapsed;
+        LiveMonitorView.Visibility = tag == "Monitor" ? Visibility.Visible : Visibility.Collapsed;
+        PowerView.Visibility = tag == "Power" ? Visibility.Visible : Visibility.Collapsed;
+        ContextView.Visibility = tag == "Context" ? Visibility.Visible : Visibility.Collapsed;
+
+        PageTitleText.Text = tag switch
+        {
+            "Network" => "Network Diagnostics & Static IP",
+            "Drives" => "Drive Sentinel",
+            "Drivers" => "Drivers, Devices & Store",
+            "Telemetry" => "Telemetry & Debloat",
+            "Monitor" => "Live Outbound Monitor",
+            "Power" => "Smart Power Plan",
+            "Context" => "Context Menus, Startup & Win+X",
+            _ => "Security Center"
+        };
+
+        if (tag == "Monitor" && !_monitorPaused)
         {
             _monitorTimer.Start();
             _ = RefreshLiveMonitorAsync();
@@ -1158,8 +1275,8 @@ public partial class MainWindow : Window
             {
                 int activeCount = _telemetryItems.Count(t => t.IsActive);
                 int safeActive = _telemetryItems.Count(t => t.IsActive && t.Risk == RiskLevel.Safe);
-                TelemetryTabItem.Header = activeCount > 0
-                    ? $"Telemetry & Debloat ({activeCount})"
+                NavTelemetryLabel.Text = activeCount > 0
+                    ? $"Telemetry ({activeCount})"
                     : "Telemetry & Debloat";
                 ApplyTelemetryFilters();
                 AppendLog($"[Telemetry] Scan complete: {_telemetryItems.Count} controls ({activeCount} active, {safeActive} safe to disable/remove).");
@@ -1359,7 +1476,7 @@ public partial class MainWindow : Window
         MonitorPauseBtn.Content = _monitorPaused ? "Resume" : "Pause";
         if (_monitorPaused)
             _monitorTimer.Stop();
-        else if (MainTabs.SelectedItem == LiveMonitorTabItem)
+        else if (LiveMonitorView.Visibility == Visibility.Visible)
             _monitorTimer.Start();
     }
 
@@ -1584,8 +1701,8 @@ public partial class MainWindow : Window
 
     private void HighlightPowerPresetButton(PresetKind kind)
     {
-        var normalBg = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFromString("#252A36")!;
-        var activeBg = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFromString("#1E3A6D")!;
+        var normalBg = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFromString("#222227")!;
+        var activeBg = (System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFromString("#2B1B0E")!;
         PresetDevBtn.Background = kind == PresetKind.SmartDevAi ? activeBg : normalBg;
         PresetPerfBtn.Background = kind == PresetKind.MaxPerformance ? activeBg : normalBg;
         PresetQuietBtn.Background = kind == PresetKind.CoolAndQuiet ? activeBg : normalBg;
@@ -2056,5 +2173,461 @@ public partial class MainWindow : Window
         {
             DarkDialog.Show(ex.Message, "Operation Failed", DarkDialogKind.Error, this);
         }
+    }
+
+    // ==================== SYSTEM TRAY & BACKGROUND WATCHDOG ====================
+
+    private void InitializeTrayIcon()
+    {
+        try
+        {
+            System.Drawing.Icon? icon = null;
+            var iconFile = Path.Combine(AppContext.BaseDirectory, "icon.ico");
+            if (File.Exists(iconFile))
+                icon = new System.Drawing.Icon(iconFile);
+            else
+                icon = System.Drawing.SystemIcons.Shield;
+
+            var menu = new System.Windows.Forms.ContextMenuStrip();
+            menu.Items.Add("Open xSecurityCenter", null, (_, _) => Dispatcher.Invoke(BringToForeground));
+            menu.Items.Add("Run Offline Network Diagnostics", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                BringToForeground();
+                NavNetwork.IsChecked = true;
+                _ = RunNetworkDiagnosticsAsync();
+            }));
+            menu.Items.Add("Scan Drives Now", null, (_, _) => Dispatcher.Invoke(() => _ = RefreshDrivesAsync(false)));
+            menu.Items.Add("Launch xPrivacyGuard", null, (_, _) => Dispatcher.Invoke(() => DashLaunchPgBtn_Click(this, new RoutedEventArgs())));
+            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            menu.Items.Add("Exit xSecurityCenter", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                _isExplicitExit = true;
+                Close();
+                System.Windows.Application.Current.Shutdown();
+            }));
+
+            _trayIcon = new System.Windows.Forms.NotifyIcon
+            {
+                Icon = icon,
+                Text = "xSecurityCenter — Background Security Center",
+                Visible = true,
+                ContextMenuStrip = menu
+            };
+            _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(BringToForeground);
+        }
+        catch { }
+    }
+
+    private void DisposeTrayIcon()
+    {
+        try
+        {
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+                _trayIcon = null;
+            }
+        }
+        catch { }
+    }
+
+    private void ShowTrayBalloon(string title, string message, System.Windows.Forms.ToolTipIcon icon)
+    {
+        try
+        {
+            _trayIcon?.ShowBalloonTip(5000, title, message, icon);
+        }
+        catch { }
+    }
+
+    private async Task RunBackgroundWatchdogTickAsync(bool initial = false)
+    {
+        try
+        {
+            var pg = await Task.Run(() => _pgMonitor.CheckStatus(_settings.PrivacyGuardExePath));
+            _lastPgStatus = pg;
+            bool isOnline = await _netDiag.QuickInternetCheckAsync();
+            var adapters = await Task.Run(() => _netDiag.GetAdapters(physicalOnly: false));
+
+            Dispatcher.Invoke(() =>
+            {
+                UpdatePrivacyGuardUi(pg);
+                UpdateNetworkSummaryUi(isOnline, adapters);
+                if (NetAdaptersGrid.ItemsSource == null || initial)
+                    NetAdaptersGrid.ItemsSource = adapters;
+                UpdateDrawerOverallHealth();
+            });
+
+            if (_settings.MonitorPrivacyGuard && !pg.IsProcessRunning &&
+                (DateTime.UtcNow - _lastPgAlertUtc).TotalMinutes >= 15)
+            {
+                _lastPgAlertUtc = DateTime.UtcNow;
+                AppendLog("[Watchdog] WARNING: xPrivacyGuard is NOT running!");
+                ShowTrayBalloon("xPrivacyGuard Stopped", "xPrivacyGuard is not running. Open xSecurityCenter to relaunch it.", System.Windows.Forms.ToolTipIcon.Warning);
+            }
+
+            if (_lastOnlineState == true && !isOnline && _settings.AutoRunNetworkDiagnosticsOnOffline)
+            {
+                AppendLog("[Watchdog] Network went OFFLINE — auto-running offline diagnostics...");
+                var report = await _netDiag.RunOfflineDiagnosticsAsync(pg);
+                Dispatcher.Invoke(() => RenderNetworkDiagnosticReport(report));
+                ShowTrayBalloon("Network Offline — Diagnostics Ready", report.Headline, System.Windows.Forms.ToolTipIcon.Warning);
+            }
+            else if (initial)
+            {
+                var report = await _netDiag.RunOfflineDiagnosticsAsync(pg);
+                Dispatcher.Invoke(() => RenderNetworkDiagnosticReport(report));
+            }
+
+            _lastOnlineState = isOnline;
+        }
+        catch { }
+    }
+
+    private void UpdatePrivacyGuardUi(PrivacyGuardStatus pg)
+    {
+        var bc = new System.Windows.Media.BrushConverter();
+        DashPgBadge.Background = (System.Windows.Media.Brush)bc.ConvertFromString(pg.BadgeBg)!;
+        DashPgBadgeText.Text = pg.BadgeText;
+        DashPgBadgeText.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString(pg.BadgeFg)!;
+        DashPgTitle.Text = pg.Headline;
+        DashPgDetail.Text = pg.IsProcessRunning
+            ? (pg.IsTunnelUp
+                ? $"PID {pg.ProcessId} • Tunnel IP {pg.TunnelIp}"
+                : $"PID {pg.ProcessId} • Process running, tunnel currently idle")
+            : $"Not detected. Expected: {pg.ExecutablePath}";
+        DrawerPgStatusText.Text = pg.IsProcessRunning
+            ? (pg.IsTunnelUp ? "xPrivacyGuard: Protected" : "xPrivacyGuard: Idle")
+            : "xPrivacyGuard: STOPPED";
+        DrawerPgStatusText.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString(pg.BadgeFg)!;
+    }
+
+    private void UpdateNetworkSummaryUi(bool isOnline, List<NetworkAdapterSnapshot> adapters)
+    {
+        var bc = new System.Windows.Media.BrushConverter();
+        var active = adapters.FirstOrDefault(a => a.AdapterKind is "Ethernet" or "Wi-Fi" && a.Status.Equals("Up", StringComparison.OrdinalIgnoreCase));
+        DashNetBadge.Background = (System.Windows.Media.Brush)bc.ConvertFromString(isOnline ? "#0E2918" : "#331417")!;
+        DashNetBadgeText.Text = isOnline ? "ONLINE" : "OFFLINE";
+        DashNetBadgeText.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString(isOnline ? "#22C55E" : "#EF4444")!;
+        DashNetTitle.Text = isOnline ? "Internet Connected" : "Network Offline";
+        DashNetDetail.Text = active != null
+            ? $"{active.Name}: {active.IpAddress} ({active.ModeLabel}) • GW {active.Gateway}"
+            : "No active Ethernet or Wi-Fi link detected.";
+        DrawerNetStatusText.Text = isOnline ? "Network: Online" : "Network: OFFLINE";
+        DrawerNetStatusText.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString(isOnline ? "#22C55E" : "#EF4444")!;
+    }
+
+    private void UpdateDrawerOverallHealth()
+    {
+        var bc = new System.Windows.Media.BrushConverter();
+        bool pgIssue = _settings.MonitorPrivacyGuard && !_lastPgStatus.IsProcessRunning;
+        bool netIssue = _lastOnlineState == false;
+        bool driveIssue = _physicalDrives.Any(d => d.Prediction.Severity >= FailureSeverity.Warning30Days);
+
+        if (pgIssue || netIssue || driveIssue)
+        {
+            DrawerStatusDot.Fill = (System.Windows.Media.Brush)bc.ConvertFromString("#EF4444")!;
+            DrawerStatusText.Text = "Attention";
+        }
+        else
+        {
+            DrawerStatusDot.Fill = (System.Windows.Media.Brush)bc.ConvertFromString("#22C55E")!;
+            DrawerStatusText.Text = "Protected";
+        }
+    }
+
+    private async void DashLaunchPgBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var (ok, msg) = _pgMonitor.LaunchPrivacyGuard(_settings.PrivacyGuardExePath);
+        AppendLog($"[PrivacyGuard] {msg}");
+        StatusFooterText.Text = msg;
+        if (!ok)
+        {
+            DarkDialog.Show(msg, "Launch xPrivacyGuard", DarkDialogKind.Warning, this);
+            return;
+        }
+        await Task.Delay(1500);
+        await RunBackgroundWatchdogTickAsync();
+    }
+
+    private async void DashCheckPgBtn_Click(object sender, RoutedEventArgs e) => await RunBackgroundWatchdogTickAsync();
+
+    // ==================== OFFLINE NETWORK DIAGNOSTICS & STATIC IP ====================
+
+    private void DashOpenNetworkBtn_Click(object sender, RoutedEventArgs e) => NavNetwork.IsChecked = true;
+
+    private async void DashRunNetDiagBtn_Click(object sender, RoutedEventArgs e)
+    {
+        NavNetwork.IsChecked = true;
+        await RunNetworkDiagnosticsAsync();
+    }
+
+    private async void RunNetDiagBtn_Click(object sender, RoutedEventArgs e) => await RunNetworkDiagnosticsAsync();
+
+    private async Task RunNetworkDiagnosticsAsync()
+    {
+        RunNetDiagBtn.IsEnabled = false;
+        StatusFooterText.Text = "Running offline network diagnostics (adapters, xPrivacyGuard, gateway, DNS, WAN)...";
+        try
+        {
+            var pg = await Task.Run(() => _pgMonitor.CheckStatus(_settings.PrivacyGuardExePath));
+            var report = await _netDiag.RunOfflineDiagnosticsAsync(pg);
+            RenderNetworkDiagnosticReport(report);
+            UpdatePrivacyGuardUi(pg);
+            UpdateNetworkSummaryUi(report.IsOnline, report.Adapters);
+            AppendLog($"[NetworkDiag] {report.Headline}");
+            StatusFooterText.Text = report.Headline;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[NetworkDiag] Error: {ex.Message}");
+            StatusFooterText.Text = $"Diagnostics error: {ex.Message}";
+        }
+        finally
+        {
+            RunNetDiagBtn.IsEnabled = true;
+        }
+    }
+
+    private void RenderNetworkDiagnosticReport(NetworkDiagnosticReport report)
+    {
+        NetDiagLastRunText.Text = $"Last run: {report.RunAt:HH:mm:ss}";
+        NetDiagHeadlineText.Text = report.Headline;
+        NetDiagRootCauseText.Text = report.RootCause;
+        NetDiagStepsText.Text = report.RecoverySteps;
+        NetDiagChecksGrid.ItemsSource = report.Checks;
+        NetAdaptersGrid.ItemsSource = report.Adapters;
+        UpdateStaticRollbackUi();
+    }
+
+    private void UpdateStaticRollbackUi()
+    {
+        bool hasRollback = _netDiag.HasActiveRollback(NetworkRollbackPath);
+        var bc = new System.Windows.Media.BrushConverter();
+        StaticRollbackBadge.Background = (System.Windows.Media.Brush)bc.ConvertFromString(hasRollback ? "#2B1B0E" : "#222227")!;
+        StaticRollbackBadgeText.Text = hasRollback ? "STATIC TROUBLESHOOTING ACTIVE" : "Normal Mode";
+        StaticRollbackBadgeText.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString(hasRollback ? "#FAAD3F" : "#A1A1AA")!;
+    }
+
+    private void AutoFillSubnetBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var adapters = _netDiag.GetAdapters(physicalOnly: true);
+        var active = adapters.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Gateway))
+                  ?? adapters.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.IpAddress) && !a.IpAddress.StartsWith("169.254."));
+        if (active == null)
+        {
+            DarkDialog.Show("No active IPv4 subnet detected. Enter your router's subnet manually (e.g., 192.168.1.x).", "Auto-Fill Subnet", DarkDialogKind.Info, this);
+            return;
+        }
+
+        var basis = !string.IsNullOrWhiteSpace(active.Gateway) ? active.Gateway : active.IpAddress;
+        var parts = basis.Split('.');
+        if (parts.Length == 4)
+        {
+            var prefix = $"{parts[0]}.{parts[1]}.{parts[2]}";
+            StaticEthIpBox.Text = $"{prefix}.250";
+            StaticWifiIpBox.Text = $"{prefix}.251";
+            StaticSubnetBox.Text = string.IsNullOrWhiteSpace(active.SubnetMask) ? "255.255.255.0" : active.SubnetMask;
+            StaticGatewayBox.Text = !string.IsNullOrWhiteSpace(active.Gateway) ? active.Gateway : $"{prefix}.1";
+            StaticPrimaryDnsBox.Text = "1.1.1.1";
+            StaticSecondaryDnsBox.Text = "8.8.8.8";
+            StatusFooterText.Text = $"Auto-filled troubleshooting static IPs for {prefix}.0/24 subnet.";
+        }
+    }
+
+    private async void ApplyStaticBothBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.StaticEthIp = StaticEthIpBox.Text.Trim();
+        _settings.StaticWifiIp = StaticWifiIpBox.Text.Trim();
+        _settings.StaticSubnetMask = StaticSubnetBox.Text.Trim();
+        _settings.StaticGateway = StaticGatewayBox.Text.Trim();
+        _settings.StaticPrimaryDns = StaticPrimaryDnsBox.Text.Trim();
+        _settings.StaticSecondaryDns = StaticSecondaryDnsBox.Text.Trim();
+        _configStore.Save(_settings);
+
+        if (!DarkDialog.Confirm(
+            $"Apply static IPv4 settings to BOTH Ethernet ({_settings.StaticEthIp}) and Wi-Fi ({_settings.StaticWifiIp})?\n\n" +
+            $"Gateway: {_settings.StaticGateway} | DNS: {_settings.StaticPrimaryDns}, {_settings.StaticSecondaryDns}\n\n" +
+            "Your current IP/DHCP configuration for both adapters will be saved so you can revert with one click.",
+            "Apply Static IP to Both Adapters", DarkDialogKind.Question, this))
+            return;
+
+        ApplyStaticBothBtn.IsEnabled = false;
+        StatusFooterText.Text = "Snapshotting current adapter settings and applying Static IP to both adapters...";
+        try
+        {
+            var ethProfile = new StaticIpProfile
+            {
+                IpAddress = _settings.StaticEthIp,
+                SubnetMask = _settings.StaticSubnetMask,
+                Gateway = _settings.StaticGateway,
+                PrimaryDns = _settings.StaticPrimaryDns,
+                SecondaryDns = _settings.StaticSecondaryDns
+            };
+            var wifiProfile = new StaticIpProfile
+            {
+                IpAddress = _settings.StaticWifiIp,
+                SubnetMask = _settings.StaticSubnetMask,
+                Gateway = _settings.StaticGateway,
+                PrimaryDns = _settings.StaticPrimaryDns,
+                SecondaryDns = _settings.StaticSecondaryDns
+            };
+
+            var (ok, msg) = await _netDiag.ApplyStaticIpToBothAdaptersAsync(ethProfile, wifiProfile, NetworkRollbackPath);
+            AppendLog($"[StaticIP] {msg}");
+            UpdateStaticRollbackUi();
+            await RunNetworkDiagnosticsAsync();
+            DarkDialog.Show(msg, "Static IP Troubleshooter", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+        }
+        finally
+        {
+            ApplyStaticBothBtn.IsEnabled = true;
+        }
+    }
+
+    private async void RevertStaticBothBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (!DarkDialog.Confirm(
+            "Revert both Ethernet and Wi-Fi adapters back to their previous saved configuration (or DHCP)?",
+            "Revert Both Adapters", DarkDialogKind.Question, this))
+            return;
+
+        RevertStaticBothBtn.IsEnabled = false;
+        StatusFooterText.Text = "Reverting both adapters to previous configuration...";
+        try
+        {
+            var (ok, msg) = await _netDiag.RevertBothAdaptersAsync(NetworkRollbackPath);
+            AppendLog($"[StaticIP] {msg}");
+            UpdateStaticRollbackUi();
+            await RunNetworkDiagnosticsAsync();
+            DarkDialog.Show(msg, "Adapters Reverted", ok ? DarkDialogKind.Success : DarkDialogKind.Warning, this);
+        }
+        finally
+        {
+            RevertStaticBothBtn.IsEnabled = true;
+        }
+    }
+
+    private async void NetFlushDnsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var msg = await _netDiag.FlushDnsAsync();
+        AppendLog($"[Network] Flush DNS: {msg}");
+        StatusFooterText.Text = "DNS cache flushed.";
+        DarkDialog.Show(msg, "Flush DNS Cache", DarkDialogKind.Success, this);
+    }
+
+    private async void NetRenewDhcpBtn_Click(object sender, RoutedEventArgs e)
+    {
+        StatusFooterText.Text = "Releasing and renewing DHCP lease...";
+        var msg = await _netDiag.RenewDhcpAsync();
+        AppendLog($"[Network] DHCP Renew: {msg}");
+        await RunNetworkDiagnosticsAsync();
+        DarkDialog.Show(msg, "Renew DHCP Lease", DarkDialogKind.Info, this);
+    }
+
+    private async void NetRestartAdaptersBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (!DarkDialog.Confirm("Disable and re-enable physical Ethernet and Wi-Fi adapters? Active connections will drop briefly.", "Restart Network Adapters", DarkDialogKind.Question, this))
+            return;
+        StatusFooterText.Text = "Restarting physical network adapters...";
+        var msg = await _netDiag.RestartPhysicalAdaptersAsync();
+        AppendLog($"[Network] Adapter Restart: {msg}");
+        await Task.Delay(2500);
+        await RunNetworkDiagnosticsAsync();
+    }
+
+    private async void NetResetStackBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (!DarkDialog.Confirm("Reset Windows Winsock catalog and TCP/IP stack? A reboot is recommended afterward.", "Reset Winsock / TCP-IP", DarkDialogKind.Warning, this))
+            return;
+        var msg = await _netDiag.ResetNetworkStackAsync();
+        AppendLog($"[Network] Stack Reset: {msg}");
+        DarkDialog.Show(msg, "Winsock / TCP-IP Reset", DarkDialogKind.Success, this);
+    }
+
+    // ==================== DRIVE SENTINEL ====================
+
+    private void DashOpenDrivesBtn_Click(object sender, RoutedEventArgs e) => NavDrives.IsChecked = true;
+
+    private async void DriveScanBtn_Click(object sender, RoutedEventArgs e) => await RefreshDrivesAsync(fromBackground: false);
+
+    private async Task RefreshDrivesAsync(bool fromBackground)
+    {
+        if (DriveScanBtn != null) DriveScanBtn.IsEnabled = false;
+        try
+        {
+            var drives = await Task.Run(() => DriveTelemetryService.GetAllPhysicalDrives());
+            _physicalDrives = drives;
+
+            int total = drives.Count(d => !d.IsVirtualDisk);
+            int risk = drives.Count(d => !d.IsVirtualDisk && d.Prediction.Severity >= FailureSeverity.AttentionNeeded);
+            int failing = drives.Count(d => !d.IsVirtualDisk && d.Prediction.Severity >= FailureSeverity.Warning30Days);
+            int healthy = Math.Max(0, total - risk);
+            var maxTemp = drives.Where(d => d.TemperatureC.HasValue).Select(d => d.TemperatureC!.Value).DefaultIfEmpty(0).Max();
+
+            Dispatcher.Invoke(() =>
+            {
+                DrivesGrid.ItemsSource = drives;
+                DriveMetricTotal.Text = total.ToString();
+                DriveMetricHealthy.Text = healthy.ToString();
+                DriveMetricRisk.Text = risk.ToString();
+                DriveMetricMaxTemp.Text = maxTemp > 0 ? $"{maxTemp}°C" : "—";
+
+                var bc = new System.Windows.Media.BrushConverter();
+                string badgeBg = failing > 0 ? "#331417" : risk > 0 ? "#2B1B0E" : "#0E2918";
+                string badgeFg = failing > 0 ? "#EF4444" : risk > 0 ? "#FAAD3F" : "#22C55E";
+                string badgeTxt = failing > 0 ? "FAILING" : risk > 0 ? "ATTENTION" : "HEALTHY";
+
+                DashDriveBadge.Background = (System.Windows.Media.Brush)bc.ConvertFromString(badgeBg)!;
+                DashDriveBadgeText.Text = badgeTxt;
+                DashDriveBadgeText.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString(badgeFg)!;
+                DashDriveTitle.Text = failing > 0
+                    ? $"{failing} Drive(s) Predicted Failing!"
+                    : risk > 0 ? $"{risk} Drive(s) Need Attention" : $"{healthy}/{total} Physical Drives Healthy";
+                DashDriveDetail.Text = maxTemp > 0
+                    ? $"Peak Temp: {maxTemp}°C • NVMe/SATA SMART monitoring active"
+                    : $"{total} physical drive(s) scanned";
+
+                DrawerDriveStatusText.Text = failing > 0
+                    ? $"Drives: {failing} FAILING!"
+                    : maxTemp > 0 ? $"Drives: {healthy}/{total} OK ({maxTemp}°C)" : $"Drives: {healthy}/{total} OK";
+                DrawerDriveStatusText.Foreground = (System.Windows.Media.Brush)bc.ConvertFromString(badgeFg)!;
+
+                if (drives.Count > 0 && DrivesGrid.SelectedItem == null)
+                    DrivesGrid.SelectedIndex = 0;
+
+                UpdateDrawerOverallHealth();
+                AppendLog($"[DriveSentinel] Scanned {total} physical drive(s): {healthy} healthy, {risk} attention/risk, peak temp {(maxTemp > 0 ? $"{maxTemp}°C" : "N/A")}.");
+            });
+
+            if (fromBackground && (failing > 0 || maxTemp >= _settings.DriveTempWarningThresholdC))
+            {
+                ShowTrayBalloon("Drive Sentinel Alert",
+                    failing > 0
+                        ? $"{failing} drive(s) showing failure warning indicators! Open Drive Sentinel immediately."
+                        : $"Drive temperature reached {maxTemp}°C (threshold {_settings.DriveTempWarningThresholdC}°C).",
+                    System.Windows.Forms.ToolTipIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[DriveSentinel] Scan error: {ex.Message}");
+        }
+        finally
+        {
+            if (DriveScanBtn != null) DriveScanBtn.IsEnabled = true;
+        }
+    }
+
+    private void DrivesGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DrivesGrid.SelectedItem is not PhysicalDriveInfo d) return;
+        SelectedDriveTitle.Text = $"Disk {d.DiskIndex}: {d.Model} ({d.MediaType}, {d.SizeLabel}) — {d.Prediction.Title}";
+        SelectedDriveDetail.Text =
+            $"{d.Prediction.Summary}  |  Action: {d.Prediction.RecommendedAction}\n" +
+            $"Serial: {d.SerialNumber}  •  Power-On: {d.PowerOnHoursLabel}  •  TBW: {d.TotalBytesWrittenLabel}  •  Spare: {d.AvailableSpareLabel}";
+        DriveSmartGrid.ItemsSource = d.SmartAttributes;
+        DriveEventsGrid.ItemsSource = d.StorageEvents;
     }
 }

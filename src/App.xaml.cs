@@ -1,17 +1,26 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using xDriverUpdater.Services;
 
 namespace xDriverUpdater;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     [DllImport("kernel32.dll")]
     private static extern bool AttachConsole(int dwProcessId);
 
+    private const string SingleInstanceMutexName = "Local\\xSecurityCenter_SingleInstance";
+    private const string ShowWindowEventName = "Local\\xSecurityCenter_ShowWindow";
+
+    private Mutex? _instanceMutex;
+    private EventWaitHandle? _showWindowEvent;
+
     protected override async void OnStartup(StartupEventArgs e)
     {
-        bool isCli = e.Args.Length > 0;
+        bool startSilent = e.Args.Any(a => a.Equals("--silent", StringComparison.OrdinalIgnoreCase));
+        bool isCli = e.Args.Length > 0 && !startSilent;
+
         DispatcherUnhandledException += (_, ex) =>
         {
             if (isCli)
@@ -22,7 +31,7 @@ public partial class App : Application
                 return;
             }
             DarkDialog.Show($"Unexpected error:\n{ex.Exception.Message}\n\n{ex.Exception.StackTrace}",
-                "xSystemForge Error", DarkDialogKind.Error);
+                "xSecurityCenter Error", DarkDialogKind.Error);
             ex.Handled = true;
         };
 
@@ -34,10 +43,56 @@ public partial class App : Application
             return;
         }
 
+        _instanceMutex = new Mutex(true, SingleInstanceMutexName, out bool createdNew);
+        if (!createdNew)
+        {
+            try
+            {
+                using var evt = EventWaitHandle.OpenExisting(ShowWindowEventName);
+                evt.Set();
+            }
+            catch { }
+            Shutdown(0);
+            return;
+        }
+
+        _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
+
         base.OnStartup(e);
-        var win = new MainWindow();
+        var win = new MainWindow(startMinimized: startSilent);
         MainWindow = win;
-        win.Show();
+
+        _ = Task.Run(() =>
+        {
+            while (_showWindowEvent != null)
+            {
+                try
+                {
+                    if (_showWindowEvent.WaitOne())
+                    {
+                        Dispatcher.BeginInvoke(() => win.BringToForeground());
+                    }
+                }
+                catch { break; }
+            }
+        });
+
+        if (!startSilent)
+        {
+            win.Show();
+        }
+        else
+        {
+            win.ShowInTaskbar = false;
+            win.Visibility = Visibility.Hidden;
+        }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        try { _showWindowEvent?.Dispose(); _showWindowEvent = null; } catch { }
+        try { _instanceMutex?.ReleaseMutex(); _instanceMutex?.Dispose(); } catch { }
+        base.OnExit(e);
     }
 
     private static async Task<int> RunCliAsync(string[] args)
@@ -45,20 +100,21 @@ public partial class App : Application
         var cmd = args[0].Trim().ToLowerInvariant();
         if (cmd is "--help" or "-h" or "/?")
         {
-            Console.WriteLine("xSystemForge — All-in-One Windows Driver, Telemetry, Debloat & Power Plan Suite");
+            Console.WriteLine("xSecurityCenter — All-in-One Windows Security, Privacy, Network, Drive, Driver, Power & System Suite");
             Console.WriteLine("Usage:");
-            Console.WriteLine("  xSystemForge.exe                                         Launch GUI");
-            Console.WriteLine("  xSystemForge.exe --audit                                 Inspect hardware, OEM/laptop status, and driver health");
-            Console.WriteLine("  xSystemForge.exe --scan                                  Scan Windows Update + Direct Manufacturer + Repositories");
-            Console.WriteLine("  xSystemForge.exe --backup [dir]                          Export all third-party drivers via pnputil");
-            Console.WriteLine("  xSystemForge.exe --list-repos                            List configured driver repositories");
-            Console.WriteLine("  xSystemForge.exe --scheduled-update                      Silently check, download & install updates (alerts xSecurity on failure)");
-            Console.WriteLine("  xSystemForge.exe --register-task [Daily|Weekly] [HH:mm]  Register Windows Scheduled Task");
-            Console.WriteLine("  xSystemForge.exe --unregister-task                       Remove Windows Scheduled Task");
-            Console.WriteLine("  xSystemForge.exe --test-alert                            Send a test alert to xSecurity & connected devices");
-            Console.WriteLine("  xSystemForge.exe --power-audit                           Inspect hardware and audit active Windows power plan");
-            Console.WriteLine("  xSystemForge.exe --power-list                            List all Windows power plans");
-            Console.WriteLine("  xSystemForge.exe --power-apply <dev|perf|quiet>          Generate, apply & verify power plan preset (alias: --apply)");
+            Console.WriteLine("  xSecurityCenter.exe                                         Launch GUI");
+            Console.WriteLine("  xSecurityCenter.exe --silent                                Launch minimized to system tray");
+            Console.WriteLine("  xSecurityCenter.exe --audit                                 Inspect hardware, OEM/laptop status, and driver health");
+            Console.WriteLine("  xSecurityCenter.exe --scan                                  Scan Windows Update + Direct Manufacturer + Repositories");
+            Console.WriteLine("  xSecurityCenter.exe --backup [dir]                          Export all third-party drivers via pnputil");
+            Console.WriteLine("  xSecurityCenter.exe --list-repos                            List configured driver repositories");
+            Console.WriteLine("  xSecurityCenter.exe --scheduled-update                      Silently check, download & install updates (alerts xSecurity on failure)");
+            Console.WriteLine("  xSecurityCenter.exe --register-task [Daily|Weekly] [HH:mm]  Register Windows Scheduled Task");
+            Console.WriteLine("  xSecurityCenter.exe --unregister-task                       Remove Windows Scheduled Task");
+            Console.WriteLine("  xSecurityCenter.exe --test-alert                            Send a test alert to xSecurity & connected devices");
+            Console.WriteLine("  xSecurityCenter.exe --power-audit                           Inspect hardware and audit active Windows power plan");
+            Console.WriteLine("  xSecurityCenter.exe --power-list                            List all Windows power plans");
+            Console.WriteLine("  xSecurityCenter.exe --power-apply <dev|perf|quiet>          Generate, apply & verify power plan preset (alias: --apply)");
             return 0;
         }
 

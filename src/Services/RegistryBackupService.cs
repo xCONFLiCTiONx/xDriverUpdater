@@ -10,7 +10,7 @@ public sealed class RegistryBackupService
 
     public string BackupDirectory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "xPrograms", "xSystemForge", "Backups", "ContextGuard");
+        "xPrograms", "xSecurityCenter", "Backups", "ContextGuard");
 
     public string LegacyBackupDirectory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
