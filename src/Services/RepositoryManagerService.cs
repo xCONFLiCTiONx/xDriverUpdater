@@ -188,7 +188,7 @@ public sealed class RepositoryManagerService
         ),
         (
             "xServer LAN Driver Repository (Self-Hosted)",
-            "https://xserver.home.xconflictionx.cc/drivers/manifest.json",
+            "https://xserver.local/drivers/manifest.json",
             "Your local xServer LAN driver manifest for gigabit-speed offline/local distribution across all home PCs."
         ),
         (

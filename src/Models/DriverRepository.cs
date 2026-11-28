@@ -61,7 +61,7 @@ public sealed class AppSettings
     public bool ScheduledTaskEnabled { get; set; } = true;
     public string ScheduledTaskFrequency { get; set; } = "Daily"; // Daily, Weekly
     public string ScheduledTaskTime { get; set; } = "03:00"; // HH:mm 24-hour
-    public string XSecurityEndpointUrl { get; set; } = "http://192.168.88.50:4789/api/events/ingest";
+    public string XSecurityEndpointUrl { get; set; } = "";
     public string XSecurityApiKey { get; set; } = "";
     public bool EnableLocalToastOnFailure { get; set; } = true;
     public double? WindowWidth { get; set; }

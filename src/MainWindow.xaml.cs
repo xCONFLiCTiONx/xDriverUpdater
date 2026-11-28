@@ -1199,9 +1199,7 @@ public partial class MainWindow : Window
     {
         _settings.ScheduledTaskFrequency = (SchedFreqCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Daily";
         _settings.ScheduledTaskTime = string.IsNullOrWhiteSpace(SchedTimeBox.Text) ? "03:00" : SchedTimeBox.Text.Trim();
-        _settings.XSecurityEndpointUrl = string.IsNullOrWhiteSpace(XSecurityUrlBox.Text)
-            ? "http://192.168.88.50:4789/api/events/ingest"
-            : XSecurityUrlBox.Text.Trim();
+        _settings.XSecurityEndpointUrl = XSecurityUrlBox.Text?.Trim() ?? "";
         _settings.EnableLocalToastOnFailure = ChkLocalToastOnFailure.IsChecked == true;
         _configStore.Save(_settings);
         UpdateDrawerOverallHealth();

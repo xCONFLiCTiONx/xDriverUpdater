@@ -24,9 +24,6 @@ public sealed class DriverUpdateFailureRecord
 /// </summary>
 public sealed class XSecurityAlertService
 {
-    private const string DefaultLanEndpoint = "http://192.168.88.50:4789/api/events/ingest";
-    private const string FallbackHttpsEndpoint = "https://security.home.xconflictionx.cc/api/events/ingest";
-
     private static readonly HttpClient Http = new()
     {
         Timeout = TimeSpan.FromSeconds(12)
@@ -140,10 +137,9 @@ public sealed class XSecurityAlertService
         var configured = settings.XSecurityEndpointUrl?.Trim();
         if (!string.IsNullOrWhiteSpace(configured))
             endpoints.Add(configured);
-        if (!endpoints.Contains(DefaultLanEndpoint, StringComparer.OrdinalIgnoreCase))
-            endpoints.Add(DefaultLanEndpoint);
-        if (!endpoints.Contains(FallbackHttpsEndpoint, StringComparer.OrdinalIgnoreCase))
-            endpoints.Add(FallbackHttpsEndpoint);
+
+        if (endpoints.Count == 0)
+            return (false, "No xSecurity Events Endpoint configured. Enter your xServer events URL in Security Center settings.");
 
         var json = JsonSerializer.Serialize(payload);
         var errors = new List<string>();

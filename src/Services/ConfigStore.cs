@@ -90,8 +90,8 @@ public sealed class ConfigStore
         if (string.IsNullOrWhiteSpace(s.ScheduledTaskTime))
             s.ScheduledTaskTime = "03:00";
 
-        if (string.IsNullOrWhiteSpace(s.XSecurityEndpointUrl))
-            s.XSecurityEndpointUrl = "http://192.168.88.50:4789/api/events/ingest";
+        if (s.XSecurityEndpointUrl == null)
+            s.XSecurityEndpointUrl = "";
 
         if (s.PinnedDevices == null)
             s.PinnedDevices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
