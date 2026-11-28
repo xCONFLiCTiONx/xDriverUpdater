@@ -433,7 +433,7 @@ public sealed class TelemetryScanner
         }
 
         // Show backed-up (disabled) startup entries from both xSystemForge and legacy xTelemetry keys
-        foreach (var backupSubKey in new[] { @"SOFTWARE\xSystemForge\Backup\Startup", @"SOFTWARE\xTelemetry\Backup\Startup" })
+        foreach (var backupSubKey in new[] { @"SOFTWARE\xSecurityCenter\Backup\Startup", @"SOFTWARE\xSystemForge\Backup\Startup", @"SOFTWARE\xTelemetry\Backup\Startup" })
         {
             try
             {

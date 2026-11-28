@@ -21,16 +21,19 @@ public sealed class ScheduledTaskStatusInfo
 /// </summary>
 public sealed class ScheduledTaskService
 {
-    public const string TaskFolder = @"\xSystemForge\";
+    public const string TaskFolder = @"\xSecurityCenter\";
     public const string TaskName = "SilentDriverUpdates";
-    public const string FullTaskPath = @"\xSystemForge\SilentDriverUpdates";
+    public const string FullTaskPath = @"\xSecurityCenter\SilentDriverUpdates";
 
     public Task<ScheduledTaskStatusInfo> GetStatusAsync()
     {
         return Task.Run(() =>
         {
             var ps = @"
-$t = Get-ScheduledTask -TaskPath '\xSystemForge\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
+$t = Get-ScheduledTask -TaskPath '\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
+if ($null -eq $t) {
+    $t = Get-ScheduledTask -TaskPath '\xSystemForge\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
+}
 if ($null -eq $t) {
     $t = Get-ScheduledTask -TaskPath '\xDriverUpdater\' -TaskName 'SilentDriverUpdates' -ErrorAction SilentlyContinue
 }
@@ -102,15 +105,16 @@ $action = New-ScheduledTaskAction -Execute '{escExe}' -Argument '--scheduled-upd
 $trigger = {triggerExpr}
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew
 $user = ""$env:USERDOMAIN\$env:USERNAME""
-# Clean up legacy xDriverUpdater scheduled task if migrating to xSystemForge
+# Clean up legacy xDriverUpdater / xSystemForge scheduled tasks if migrating to xSecurityCenter
 Unregister-ScheduledTask -TaskPath '\xDriverUpdater\' -TaskName 'SilentDriverUpdates' -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskPath '\xSystemForge\' -TaskName 'SilentDriverUpdates' -Confirm:$false -ErrorAction SilentlyContinue
 try {{
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Highest
-    Register-ScheduledTask -TaskPath '\xSystemForge\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSystemForge silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
+    Register-ScheduledTask -TaskPath '\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSecurityCenter silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
     Write-Output 'Registered (Elevated S4U)'
 }} catch {{
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskPath '\xSystemForge\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSystemForge silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
+    Register-ScheduledTask -TaskPath '\xSecurityCenter\' -TaskName 'SilentDriverUpdates' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'xSecurityCenter silent driver update check, download, install, and xSecurity failure alerting' -Force | Out-Null
     Write-Output 'Registered (Elevated Interactive)'
 }}
 ";

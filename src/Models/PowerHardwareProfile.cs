@@ -65,6 +65,7 @@ public sealed class PowerSchemeInfo
                           || Guid == PowerGuids.SchemeHighPerformance
                           || Guid == PowerGuids.SchemePowerSaver;
     public bool IsManagedPlan => Name.StartsWith("xPowerPlan", StringComparison.OrdinalIgnoreCase)
+                              || Name.StartsWith("xSecurityCenter", StringComparison.OrdinalIgnoreCase)
                               || Name.StartsWith("xSystemForge", StringComparison.OrdinalIgnoreCase);
     public string ActiveBadge => IsActive ? "ACTIVE" : "";
     public string DisplayLine => IsActive ? $"{Name}  (Active)" : Name;

@@ -83,6 +83,7 @@ $issLines = @(
     "AppContact={#AppContact}",
     "AppComments={#AppDescription}",
     "DefaultDirName={localappdata}\xPrograms\{#AppFolderName}",
+"UsePreviousAppDir=no",
     "DefaultGroupName=xPrograms",
     "DisableProgramGroupPage=yes",
     "PrivilegesRequired=lowest",

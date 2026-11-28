@@ -2213,7 +2213,7 @@ public partial class MainWindow : Window
         }
         catch (UnauthorizedAccessException ex)
         {
-            DarkDialog.Show($"Windows denied access to this location. Ensure xSystemForge is running as administrator.\n\n{ex.Message}", "Access Denied", DarkDialogKind.Warning, this);
+            DarkDialog.Show($"Windows denied access to this location. Ensure xSecurityCenter is running as administrator.\n\n{ex.Message}", "Access Denied", DarkDialogKind.Warning, this);
         }
         catch (System.Security.SecurityException ex)
         {

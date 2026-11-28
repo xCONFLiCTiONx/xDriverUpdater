@@ -197,7 +197,7 @@ public sealed class TelemetryController
 
         if (disable)
         {
-            using (var backup = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\xSystemForge\Backup\Startup", writable: true))
+            using (var backup = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\xSecurityCenter\Backup\Startup", writable: true))
             {
                 backup?.SetValue(backupName, $"{item.StartupHive}|{item.StartupKeyPath}|{item.StartupValueName}|{item.StartupCommand}", RegistryValueKind.String);
             }
@@ -216,7 +216,7 @@ public sealed class TelemetryController
             using var key = baseKey.CreateSubKey(item.StartupKeyPath, writable: true);
             key?.SetValue(item.StartupValueName, item.StartupCommand ?? string.Empty, RegistryValueKind.String);
 
-            foreach (var sub in new[] { @"SOFTWARE\xSystemForge\Backup\Startup", @"SOFTWARE\xTelemetry\Backup\Startup" })
+            foreach (var sub in new[] { @"SOFTWARE\xSecurityCenter\Backup\Startup", @"SOFTWARE\xSystemForge\Backup\Startup", @"SOFTWARE\xTelemetry\Backup\Startup" })
             {
                 using var backup = Registry.CurrentUser.OpenSubKey(sub, writable: true);
                 backup?.DeleteValue(backupName, throwOnMissingValue: false);
@@ -233,7 +233,7 @@ public sealed class TelemetryController
         if (string.IsNullOrWhiteSpace(exePath))
             return (false, "Executable path unavailable for this process.");
 
-        string ruleName = $"xSystemForge Block - {processName} ({exePath.GetHashCode():X8})";
+        string ruleName = $"xSecurityCenter Block - {processName} ({exePath.GetHashCode():X8})";
         object? policyObj = null;
         try
         {
@@ -252,7 +252,7 @@ public sealed class TelemetryController
                 var ruleType = Type.GetTypeFromProgID("HNetCfg.FWRule");
                 dynamic rule = Activator.CreateInstance(ruleType!)!;
                 rule.Name = ruleName;
-                rule.Description = $"Outbound block created by xSystemForge for {exePath}";
+                rule.Description = $"Outbound block created by xSecurityCenter for {exePath}";
                 rule.ApplicationName = exePath;
                 rule.Direction = 2; // NET_FW_RULE_DIR_OUT
                 rule.Action = 0;    // NET_FW_ACTION_BLOCK
@@ -270,7 +270,8 @@ public sealed class TelemetryController
                     {
                         string rName = r.Name ?? "";
                         string appName = r.ApplicationName ?? "";
-                        if ((rName.StartsWith("xSystemForge Block - ", StringComparison.OrdinalIgnoreCase) ||
+                        if ((rName.StartsWith("xSecurityCenter Block - ", StringComparison.OrdinalIgnoreCase) ||
+                             rName.StartsWith("xSystemForge Block - ", StringComparison.OrdinalIgnoreCase) ||
                              rName.StartsWith("xTelemetry Block - ", StringComparison.OrdinalIgnoreCase)) &&
                             string.Equals(appName, exePath, StringComparison.OrdinalIgnoreCase))
                         {
@@ -314,7 +315,8 @@ public sealed class TelemetryController
                 try
                 {
                     string name = r.Name ?? "";
-                    if ((name.StartsWith("xSystemForge Block - ", StringComparison.OrdinalIgnoreCase) ||
+                    if ((name.StartsWith("xSecurityCenter Block - ", StringComparison.OrdinalIgnoreCase) ||
+                         name.StartsWith("xSystemForge Block - ", StringComparison.OrdinalIgnoreCase) ||
                          name.StartsWith("xTelemetry Block - ", StringComparison.OrdinalIgnoreCase)) &&
                         r.Enabled == true)
                     {

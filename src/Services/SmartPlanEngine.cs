@@ -346,7 +346,7 @@ public sealed class SmartPlanEngine
                     ? backupBaseDir
                     : Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "xPrograms", "xSystemForge", "Backups", "PowerPlans");
+                        "xPrograms", "xSecurityCenter", "Backups", "PowerPlans");
                 var safeOld = string.Concat(hw.ActiveScheme.Name.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_' or ' ')).Trim().Replace(' ', '_');
                 var backupFile = Path.Combine(backupDir, $"{DateTime.Now:yyyyMMdd_HHmmss}_{safeOld}.pow");
                 var (bkOk, bkOut) = _powerCfg.ExportScheme(hw.ActiveScheme.Guid, backupFile);
